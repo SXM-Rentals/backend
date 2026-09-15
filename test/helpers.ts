@@ -1,0 +1,193 @@
+// SXM Rentals — Created by Giordano Bertin-Maurice
+// Copyright (c) 2026 Giordano Bertin-Maurice. All rights reserved.
+// WHAT THIS FILE DOES: Shared tools for the tests. It builds a complete private
+// copy of the API backed by a brand-new, empty in-memory database with every
+// migration applied, captures outgoing emails instead of sending them, and
+// offers shortcuts for the steps many tests repeat — creating a verified
+// account, signing in, and filling the database with a customer, a rental
+// business, a car and a booking.
+
+import type { FastifyInstance } from 'fastify';
+import { buildApp } from '../src/app.js';
+import { loadConfig } from '../src/config.js';
+import { connectPglite, type Database } from '../src/db/client.js';
+import { bookings, customers, providers, vehicles } from '../src/db/schema/index.js';
+import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
+
+export const WEB_ORIGIN = 'http://localhost:3000';
+export const SESSION_COOKIE = 'sxm_session';
+export const GOOD_PASSWORD = 'correct horse battery staple';
+
+export type TestContext = {
+  app: FastifyInstance;
+  db: Database;
+  email: MemoryEmailSender;
+  // Passwords added here are treated as "found in a data breach".
+  breachedPasswords: Set<string>;
+  close: () => Promise<void>;
+};
+
+// ---- A PRIVATE COPY OF THE API ----
+export async function createTestContext(options: { extend?: (app: FastifyInstance) => void } = {}): Promise<TestContext> {
+  const connection = await connectPglite();
+  await connection.migrate();
+
+  const config = loadConfig({ NODE_ENV: 'test', CORS_ORIGINS: WEB_ORIGIN, APP_URL: WEB_ORIGIN });
+  const email = createMemoryEmailSender();
+  const breachedPasswords = new Set<string>();
+
+  const app = await buildApp({
+    config,
+    db: connection.db,
+    email,
+    breachedPasswords: { isBreached: async (password) => breachedPasswords.has(password) },
+    extend: options.extend,
+  });
+  await app.ready();
+
+  return {
+    app,
+    db: connection.db,
+    email,
+    breachedPasswords,
+    close: async () => {
+      await app.close();
+      await connection.close();
+    },
+  };
+}
+
+// ---- A DIFFERENT VISITOR ADDRESS PER CALL ----
+// Rate limits are per address, so tests that are not about rate limiting use a
+// fresh address each time to avoid tripping over each other's limits.
+let addressCounter = 0;
+export function uniqueIp(): string {
+  addressCounter += 1;
+  return `10.${(addressCounter >> 16) & 255}.${(addressCounter >> 8) & 255}.${addressCounter & 255}`;
+}
+
+// ---- READING THE LINK OUT OF AN EMAIL ----
+export function tokenFromLastEmail(email: MemoryEmailSender): string {
+  const last = email.sent.at(-1);
+  const match = last?.text.match(/token=([A-Za-z0-9_-]+)/);
+  if (!match?.[1]) throw new Error(`No link found in the last email: ${last?.subject ?? '(no email sent)'}`);
+  return match[1];
+}
+
+// ---- A READY-TO-USE ACCOUNT ----
+let accountCounter = 0;
+export async function createVerifiedAccount(ctx: TestContext, overrides: { email?: string; password?: string } = {}) {
+  accountCounter += 1;
+  const email = overrides.email ?? `person${accountCounter}@example.com`;
+  const password = overrides.password ?? GOOD_PASSWORD;
+
+  const signup = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/signup',
+    remoteAddress: uniqueIp(),
+    payload: { firstName: 'Aria', lastName: 'Duncan', email, password, accountType: 'tourist' },
+  });
+  if (signup.statusCode !== 202) throw new Error(`Signup failed: ${signup.body}`);
+
+  const verify = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/verify-email',
+    remoteAddress: uniqueIp(),
+    payload: { token: tokenFromLastEmail(ctx.email) },
+  });
+  if (verify.statusCode !== 200) throw new Error(`Verification failed: ${verify.body}`);
+
+  return { email, password };
+}
+
+// ---- SIGNING IN ----
+// Website style: returns the cookie to send back on later requests.
+export async function signInWeb(ctx: TestContext, email: string, password: string): Promise<string> {
+  const res = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    remoteAddress: uniqueIp(),
+    headers: { origin: WEB_ORIGIN },
+    payload: { email, password },
+  });
+  const cookie = res.cookies.find((c) => c.name === SESSION_COOKIE);
+  if (res.statusCode !== 200 || !cookie) throw new Error(`Web sign-in failed: ${res.body}`);
+  return `${SESSION_COOKIE}=${cookie.value}`;
+}
+
+// Phone-app style: returns the bearer code.
+export async function signInMobile(ctx: TestContext, email: string, password: string): Promise<string> {
+  const res = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    remoteAddress: uniqueIp(),
+    payload: { email, password, client: 'mobile' },
+  });
+  const token = res.json()?.session?.token;
+  if (res.statusCode !== 200 || typeof token !== 'string') throw new Error(`Mobile sign-in failed: ${res.body}`);
+  return token;
+}
+
+// ---- A CUSTOMER, A BUSINESS, A CAR AND A BOOKING ----
+// Inserted straight into the database, for tests about the data rules.
+let seedCounter = 0;
+export async function seedBooking(db: Database) {
+  seedCounter += 1;
+  const [customer] = await db
+    .insert(customers)
+    .values({
+      firstName: 'Benjamin',
+      lastName: 'Jones',
+      email: `renter${seedCounter}@example.com`,
+      phone: '+1 721 555 0142',
+      accountType: 'tourist',
+      verificationStatus: 'approved',
+    })
+    .returning();
+  const [provider] = await db
+    .insert(providers)
+    .values({ businessName: 'Island Wheels', side: 'dutch', town: 'Philipsburg' })
+    .returning();
+  const [vehicle] = await db
+    .insert(vehicles)
+    .values({
+      reference: `SXM-V-${100 + seedCounter}`,
+      providerId: provider!.id,
+      make: 'Suzuki',
+      model: 'Jimny',
+      year: 2024,
+      vehicleClass: 'fourByFour',
+      transmission: 'manual',
+      fuel: 'petrol',
+      seats: 4,
+      doors: 3,
+      dailyRateCents: 6500,
+      depositAmountCents: 50000,
+      pickupTown: 'Philipsburg',
+      side: 'dutch',
+      latitude: 18.026,
+      longitude: -63.045,
+    })
+    .returning();
+  const [booking] = await db
+    .insert(bookings)
+    .values({
+      reference: `SXM-${4800 + seedCounter}`,
+      customerId: customer!.id,
+      vehicleId: vehicle!.id,
+      providerId: provider!.id,
+      startDate: '2026-10-01',
+      endDate: '2026-10-04',
+      pickupTime: '10:00',
+      returnTime: '10:00',
+      collection: 'pickup',
+      location: 'Princess Juliana Airport',
+      grossCents: 19500,
+      commissionCents: 5850,
+      payoutCents: 13650,
+      totalDueTodayCents: 19500,
+    })
+    .returning();
+
+  return { customer: customer!, provider: provider!, vehicle: vehicle!, booking: booking! };
+}

@@ -1,0 +1,25 @@
+# SXM Rentals — Created by Giordano Bertin-Maurice
+# Copyright (c) 2026 Giordano Bertin-Maurice. All rights reserved.
+# WHAT THIS FILE DOES: Lists the files git should never save — installed
+# packages, build output, and above all the .env files that hold real
+# passwords and API keys. If a secret ever shows up in `git status`, it
+# belongs in here.
+
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+*.log
+npm-debug.log*
+.DS_Store
+.gstack/
+.idea/
+.vscode/
+
+# Secrets. Only .env.example (which holds no real values) is committed.
+.env
+.env.*
+!.env.example
+
+# The embedded development database created when DATABASE_URL is not set.
+.data/
