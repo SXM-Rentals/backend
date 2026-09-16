@@ -79,8 +79,13 @@ export type FakeGateway = PaymentGateway & {
   captured: { paymentId: string; amountCents: number }[];
   cancelled: string[];
   refunded: { paymentId: string; amountCents?: number }[];
+  // The businesses' own Stripe accounts, and the money sent to them.
+  accounts: Map<string, { providerId: string; payoutsEnabled: boolean; outstanding: string[] }>;
+  transfers: { accountId: string; amountCents: number; reference: string }[];
   // Builds the message Stripe would send about a payment.
   eventFor(type: string, paymentId: string, overrides?: Record<string, unknown>): WebhookEvent;
+  // Builds the message Stripe sends when a business finishes giving details.
+  accountEventFor(accountId: string, payoutsEnabled: boolean, outstanding?: string[]): WebhookEvent;
 };
 
 export function createFakeGateway(): FakeGateway {
@@ -101,6 +106,8 @@ export function createFakeGateway(): FakeGateway {
     captured: [],
     cancelled: [],
     refunded: [],
+    accounts: new Map(),
+    transfers: [],
 
     async createRentalPayment(input) {
       return create('rental', input.amountCents, { bookingId: input.bookingId, reference: input.bookingReference });
@@ -128,6 +135,27 @@ export function createFakeGateway(): FakeGateway {
     async refundPayment(paymentId, amountCents) {
       gateway.refunded.push({ paymentId, amountCents });
     },
+    // ---- PAYING RENTAL BUSINESSES ----
+    async createConnectedAccount(input) {
+      counter += 1;
+      const id = `acct_${counter}`;
+      gateway.accounts.set(id, { providerId: input.providerId, payoutsEnabled: false, outstanding: ['bank_account'] });
+      return { id };
+    },
+    async createAccountOnboardingLink(input) {
+      return { url: `https://connect.stripe.test/setup/${input.accountId}` };
+    },
+    async getConnectedAccount(accountId) {
+      const account = gateway.accounts.get(accountId);
+      if (!account) return null;
+      return { id: accountId, payoutsEnabled: account.payoutsEnabled, outstanding: account.outstanding };
+    },
+    async createTransfer(input) {
+      counter += 1;
+      gateway.transfers.push(input);
+      return { id: `tr_${counter}` };
+    },
+
     verifyWebhook(rawBody, signature) {
       // The real Stripe checks a signature over these exact bytes; this checks
       // a fixed one, so a test can prove an unsigned message is refused.
@@ -135,6 +163,20 @@ export function createFakeGateway(): FakeGateway {
         throw new AppError(400, 'invalid_signature', 'This message could not be verified.');
       }
       return JSON.parse(rawBody.toString('utf8')) as WebhookEvent;
+    },
+
+    accountEventFor(accountId, payoutsEnabled, outstanding = []) {
+      const account = gateway.accounts.get(accountId);
+      if (account) {
+        account.payoutsEnabled = payoutsEnabled;
+        account.outstanding = outstanding;
+      }
+      counter += 1;
+      return {
+        id: `evt_${counter}`,
+        type: 'account.updated',
+        data: { object: { id: accountId, payouts_enabled: payoutsEnabled, requirements: { currently_due: outstanding } } },
+      };
     },
 
     eventFor(type, paymentId, overrides = {}) {

@@ -108,7 +108,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(authRoutes, { prefix: '/auth', auth, config });
       await api.register(customerRoutes, { prefix: '/customers', auth });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
-      await api.register(providerRoutes, { prefix: '/providers', db });
+      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config });
       await api.register(bookingRoutes, { prefix: '/bookings', db });
       await api.register(paymentRoutes, { prefix: '/payments', payments });
       await api.register(depositRoutes, { prefix: '/deposits', payments });

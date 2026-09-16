@@ -20,7 +20,13 @@
 
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { bookings, deposits, ledgerEntries, processedWebhookEvents } from '../../db/schema/index.js';
+import {
+  bookings,
+  deposits,
+  ledgerEntries,
+  processedWebhookEvents,
+  providerPayoutAccounts,
+} from '../../db/schema/index.js';
 import type { PaymentGateway, WebhookEvent } from '../../lib/stripe.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
@@ -260,6 +266,23 @@ export function createPaymentService(deps: PaymentServiceDeps) {
           if (!booking) break;
           await db.update(bookings).set({ paymentStatus: 'refunded' }).where(eq(bookings.id, booking.id));
           await recordLedgerEntry(db, booking.id, 'refund', amountCents, 'succeeded', refundedIntent);
+          break;
+        }
+
+        // A rental business has given Stripe more of its details, so what it
+        // is still waiting for — and whether they can be paid — has changed.
+        case 'account.updated': {
+          const payoutsEnabled = object.payouts_enabled === true;
+          const requirements = object.requirements as { currently_due?: string[] } | undefined;
+          const outstanding = requirements?.currently_due ?? [];
+          await db
+            .update(providerPayoutAccounts)
+            .set({
+              payoutsEnabled,
+              outstanding,
+              status: payoutsEnabled ? 'active' : outstanding.length > 0 ? 'pending' : 'restricted',
+            })
+            .where(eq(providerPayoutAccounts.stripeAccountId, paymentId));
           break;
         }
 

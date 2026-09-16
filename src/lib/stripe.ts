@@ -52,6 +52,16 @@ export type DepositHoldInput = {
   amountCents: number;
 };
 
+// A rental business's own Stripe account, which is where their share is sent.
+// SXM Rentals never holds their money on their behalf: Stripe pays them
+// directly, and we only ever ask for the transfer.
+export type ConnectedAccount = {
+  id: string;
+  payoutsEnabled: boolean;
+  // What Stripe is still waiting for from the business, in its own words.
+  outstanding: string[];
+};
+
 // Everything the backend ever asks a payment processor to do.
 export type PaymentGateway = {
   // Charge the customer for the rental.
@@ -68,6 +78,26 @@ export type PaymentGateway = {
   refundPayment(paymentId: string, amountCents?: number): Promise<void>;
   // Check a message really came from Stripe, and read it.
   verifyWebhook(rawBody: Buffer, signature: string | undefined): WebhookEvent;
+
+  // ---- PAYING RENTAL BUSINESSES ----
+  // Start a business's own Stripe account.
+  createConnectedAccount(input: {
+    providerId: string;
+    businessName: string;
+    email: string;
+    country: string;
+  }): Promise<{ id: string }>;
+  // The one-time link where the business gives Stripe its details. We never see
+  // their bank details; they go straight to Stripe.
+  createAccountOnboardingLink(input: {
+    accountId: string;
+    returnUrl: string;
+    refreshUrl: string;
+  }): Promise<{ url: string }>;
+  // Where a business has got to in being able to receive money.
+  getConnectedAccount(accountId: string): Promise<ConnectedAccount | null>;
+  // Send a business their share.
+  createTransfer(input: { accountId: string; amountCents: number; reference: string }): Promise<{ id: string }>;
 };
 
 // Raised when the endpoints are used before Stripe has been connected.
@@ -149,6 +179,59 @@ export function createStripeGateway(options: {
       await stripe.refunds.create({ payment_intent: paymentId, ...(amountCents ? { amount: amountCents } : {}) });
     },
 
+    // ---- PAYING RENTAL BUSINESSES ----
+    async createConnectedAccount(input) {
+      const account = await stripe.accounts.create(
+        {
+          type: 'express',
+          country: input.country,
+          email: input.email,
+          business_profile: { name: input.businessName },
+          metadata: { providerId: input.providerId },
+        },
+        { idempotencyKey: `connect-${input.providerId}` },
+      );
+      return { id: account.id };
+    },
+
+    async createAccountOnboardingLink(input) {
+      const link = await stripe.accountLinks.create({
+        account: input.accountId,
+        type: 'account_onboarding',
+        return_url: input.returnUrl,
+        refresh_url: input.refreshUrl,
+      });
+      return { url: link.url };
+    },
+
+    async getConnectedAccount(accountId) {
+      try {
+        const account = await stripe.accounts.retrieve(accountId);
+        return {
+          id: account.id,
+          payoutsEnabled: account.payouts_enabled ?? false,
+          outstanding: account.requirements?.currently_due ?? [],
+        };
+      } catch {
+        return null;
+      }
+    },
+
+    async createTransfer(input) {
+      const transfer = await stripe.transfers.create(
+        {
+          amount: input.amountCents,
+          currency,
+          destination: input.accountId,
+          transfer_group: input.reference,
+          metadata: { payoutReference: input.reference },
+        },
+        // Asking twice for the same payout sends the money once.
+        { idempotencyKey: `payout-${input.reference}` },
+      );
+      return { id: transfer.id };
+    },
+
     verifyWebhook(rawBody, signature) {
       if (!options.webhookSecret) throw notConfigured();
       if (!signature) {
@@ -186,6 +269,10 @@ export function createUnconfiguredGateway(): PaymentGateway {
     captureDepositHold: refuse,
     cancelDepositHold: refuse,
     refundPayment: refuse,
+    createConnectedAccount: refuse,
+    createAccountOnboardingLink: refuse,
+    getConnectedAccount: refuse,
+    createTransfer: refuse,
     verifyWebhook() {
       throw notConfigured();
     },

@@ -104,6 +104,9 @@ export const bookings = pgTable(
     stripePaymentIntentId: text('stripe_payment_intent_id'),
 
     promoCodeId: uuid('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
+    // Which payout covered this booking's share. Empty until the business has
+    // been paid for it — which is exactly what stops it being paid for twice.
+    payoutId: uuid('payout_id').references(() => payouts.id, { onDelete: 'set null' }),
     agreementSignedAt: moment('agreement_signed_at'),
     cancelledAt: moment('cancelled_at'),
     createdAt: createdAt(),
@@ -115,6 +118,7 @@ export const bookings = pgTable(
     index('bookings_customer_idx').on(t.customerId),
     index('bookings_provider_idx').on(t.providerId),
     index('bookings_vehicle_dates_idx').on(t.vehicleId, t.startDate, t.endDate),
+    index('bookings_payout_idx').on(t.payoutId),
     check('bookings_money_adds_up', sql`${t.grossCents} = ${t.payoutCents} + ${t.commissionCents}`),
     check(
       'bookings_money_not_negative',

@@ -16,9 +16,12 @@ cars, working out what a rental costs, and making a booking. Phase 3 is the
 money: charging for a rental, holding a security deposit, and dealing with what
 Stripe tells us afterwards.
 
-Identity checks, the business dashboard, admin tools, rewards, notifications and
-the support agent arrive in later phases; their folders exist as clearly marked
-placeholders.
+Phase 5 is the business side: a rental business registering, its own record, its
+fleet, the bookings across that fleet, and being paid through Stripe Connect.
+
+Identity checks (Phase 4) are deliberately skipped for now and handled by hand.
+Admin tools, rewards, notifications, messaging and the support agent arrive
+later; their folders exist as clearly marked placeholders.
 
 **Stripe is not connected yet.** Until `STRIPE_SECRET_KEY` is set, the payment
 and deposit endpoints answer "not switched on yet" rather than appearing to take
@@ -103,6 +106,8 @@ src/
     availability-engine/  is this car free, and which days are taken
     booking-engine/    what a rental costs, and making the booking
     payments/          charges, deposit holds, and what Stripe tells us after
+    payment-splitting/ what each business is owed, and sending it
+    provider/          the business dashboard: record, fleet, bookings, payouts
     serializers/       database rows → the exact shapes the apps expect
   lib/                 small shared tools: passwords, codes, errors, email, Stripe
   types/api.ts         the response shapes, copied from sxm-rentals-web
@@ -111,6 +116,7 @@ test/
   vehicles.test.ts     searching, filtering, availability, reviews
   bookings.test.ts     prices, making and cancelling bookings, double-booking
   payments.test.ts     charges, deposit holds, claims, Stripe's messages
+  provider.test.ts     the business dashboard, fleet, payouts, and its walls
   security.test.ts     headers, CORS, forged requests, rate limits, errors
   rules/               the three product rules
 ```
@@ -155,6 +161,16 @@ Everything lives under `/api/v1`.
 | POST | `/deposits/:id/release` | Give a deposit back — **staff only** |
 | POST | `/deposits/:id/claim` | Keep part of one — **staff only** |
 | POST | `/webhooks/stripe` | What Stripe tells us happened |
+| POST | `/providers/apply` | Register a rental business |
+| GET · PATCH | `/providers/me` | The business's own record |
+| GET | `/providers/me/summary` | The dashboard headline figures |
+| GET · POST | `/providers/me/vehicles` | The whole fleet, approved or not · add a car |
+| PATCH · DELETE | `/providers/me/vehicles/:id` | Edit one · take one off the platform |
+| GET | `/providers/me/performance` | How each car is doing |
+| GET | `/providers/me/bookings` | Bookings across the fleet |
+| GET | `/providers/me/bookings/:id` | One of them |
+| GET | `/providers/me/payouts` | What SXM Rentals has paid them |
+| GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |
 
 Browsing is public: somebody searching for a car has not signed in yet, and a
 search result needs to be able to appear in Google. Only cars staff have
@@ -174,6 +190,34 @@ it checks, so two people booking the same days at the same instant cannot both
 succeed — the second gets a clear "just been booked". A rental from the 1st to
 the 4th uses the nights of the 1st, 2nd and 3rd, so the 4th is free for the next
 person to collect.
+
+---
+
+## The business dashboard
+
+Everything under `/providers/me` belongs to whoever is signed in. **"me" is
+worked out from the session, never from anything in the request**, so there is
+no business id to tamper with — and every query underneath is tied to that one
+business. A business asking for another's car or booking is told it does not
+exist.
+
+**A business never receives a customer's phone number or email.** Its bookings
+are built by a serializer with no field to put one in: it gets a display name
+("Benjamin J.") and whether the person has been verified, which is what is
+actually needed to hand over a car.
+
+**A new business is unverified and its cars are unlisted.** It cannot make
+itself "SXM Verified" — that is a staff decision — and a car it adds waits for
+staff approval before any customer can see it.
+
+**Payouts.** A payout gathers the finished, paid-for bookings a business has not
+yet been paid for and records one payment covering the lot. Each booking is
+stamped with the payout that covered it, so running a payout twice cannot pay
+for the same rental twice. Security deposits are never part of a payout — the
+code that builds one does not read the deposits table at all. The business gives
+its bank details to Stripe directly through a one-time link; they never pass
+through this server, and Stripe pays the business rather than SXM Rentals
+holding their money.
 
 ---
 
@@ -282,11 +326,14 @@ Mapped to the Phase 1 list in the Security Hardening Spec.
   route added early cannot be reached.
 - **Sign in with Apple and Google.** Needs developer-account keys.
 - **A real email provider** (see above).
-- **Paying businesses (Stripe Connect).** Each booking already records what the
-  business is owed and what SXM Rentals keeps; onboarding businesses to Stripe
-  and sending the money arrives with the business dashboard in Phase 5.
-- **Everything past payments** — identity checks, the business dashboard, admin
-  tools, rewards, notifications and the support agent.
+- **Identity checks (Phase 4).** Skipped on purpose for now — verification is
+  handled by hand. The status fields and document tables already exist.
+- **Messaging between a customer and a business.** Neither side has it yet, so
+  the dashboard's "enquiries" figure is 0 rather than an invented number.
+- **Fleet import from a spreadsheet, and the "connect your own system" API** —
+  add-ons to the dashboard rather than part of it.
+- **Everything past that** — admin tools, rewards, notifications and the support
+  agent.
 
 **Known dependency advisory:** `npm audit` reports 4 moderate advisories, all
 inside `drizzle-kit` (the migration generator). It bundles an old esbuild with a

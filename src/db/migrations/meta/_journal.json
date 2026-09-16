@@ -15,6 +15,13 @@
       "when": 1789573608155,
       "tag": "0001_payments_and_webhooks",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789575584967,
+      "tag": "0002_provider_payouts",
+      "breakpoints": true
     }
   ]
 }
