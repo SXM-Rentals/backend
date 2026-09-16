@@ -54,12 +54,14 @@ export function toAdminUser(
   };
 }
 
-// The tier thresholds from the overview document. Points are the sum of the
-// rewards ledger, so a tier is worked out rather than stored and left to drift.
+// The tier ladder, matching the one the apps draw on the rewards screen.
+// Points are the sum of the rewards ledger, so a tier is worked out rather than
+// stored and left to drift. The scheme itself is not built yet; this only
+// labels what a staff member sees against a customer.
 export function tierForPoints(points: number): 'explorer' | 'traveler' | 'vip' | 'elite' {
-  if (points >= 10_000) return 'elite';
-  if (points >= 5_000) return 'vip';
-  if (points >= 1_500) return 'traveler';
+  if (points >= 20_000) return 'elite';
+  if (points >= 7_500) return 'vip';
+  if (points >= 2_500) return 'traveler';
   return 'explorer';
 }
 

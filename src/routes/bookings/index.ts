@@ -27,8 +27,9 @@ import {
   listBookingsFor,
   quoteFor,
 } from '../../services/booking-engine/index.js';
+import type { NotificationService } from '../../services/notifications/index.js';
 
-export type BookingRouteOptions = { db: Database };
+export type BookingRouteOptions = { db: Database; notifications: NotificationService };
 
 // A time of day as the apps send it, e.g. "10:00".
 const timeField = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Please give a time like 10:00.');
@@ -49,7 +50,7 @@ const createBody = quoteBody.extend({
 const idParam = z.object({ id: z.string().max(64) });
 
 export default async function bookingRoutes(app: FastifyInstance, options: BookingRouteOptions) {
-  const { db } = options;
+  const { db, notifications } = options;
 
   // ---- WHAT WOULD THIS COST? ----
   // Public: the price is shown on a car's page before anyone signs in. The
@@ -74,7 +75,7 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
   app.post('/', async (request, reply) => {
     const actor = requireCustomer(request);
     const body = parseInput(createBody, request.body);
-    const booking = await createBooking(db, actor, body);
+    const booking = await createBooking(db, actor, body, notifications);
     return reply.status(201).send(booking);
   });
 
@@ -90,6 +91,6 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
   app.post('/:id/cancel', async (request) => {
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
-    return cancelBooking(db, actor, id);
+    return cancelBooking(db, actor, id, notifications);
   });
 }

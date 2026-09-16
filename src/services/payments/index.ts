@@ -36,10 +36,20 @@ type Logger = {
   warn: (obj: object, msg: string) => void;
 };
 
+// Told when money actually moves, so the customer hears about it. Optional: a
+// payment is never failed because a message could not be sent.
+export type PaymentNotifier = {
+  paymentSucceeded(bookingId: string): Promise<void>;
+  paymentFailed(bookingId: string): Promise<void>;
+  depositReleased(depositId: string): Promise<void>;
+  depositClaimed(depositId: string): Promise<void>;
+};
+
 export type PaymentServiceDeps = {
   db: Database;
   gateway: PaymentGateway;
   logger: Logger;
+  notifications?: PaymentNotifier;
 };
 
 // What an app is given so it can finish the payment on the customer's device.
@@ -53,7 +63,7 @@ export type PaymentStart = {
 const toAmount = (cents: number) => cents / 100;
 
 export function createPaymentService(deps: PaymentServiceDeps) {
-  const { db, gateway, logger } = deps;
+  const { db, gateway, logger, notifications } = deps;
 
   // ---- ONE OF YOUR OWN BOOKINGS ----
   // Somebody else's booking is "not found", exactly like one that never existed.
@@ -160,6 +170,8 @@ export function createPaymentService(deps: PaymentServiceDeps) {
         .update(deposits)
         .set({ status: 'released', releasedAt: new Date() })
         .where(eq(deposits.id, deposit.id));
+
+      await notifications?.depositReleased(deposit.id);
     },
 
     // ---- KEEPING PART OF A DEPOSIT ----
@@ -190,6 +202,9 @@ export function createPaymentService(deps: PaymentServiceDeps) {
           claimedAmountCents: input.amountCents,
         })
         .where(eq(deposits.id, deposit.id));
+
+      // Always tell the customer, with the reason that was written down.
+      await notifications?.depositClaimed(deposit.id);
     },
 
     // ---- WHAT STRIPE TELLS US AFTERWARDS ----
@@ -220,6 +235,7 @@ export function createPaymentService(deps: PaymentServiceDeps) {
             .set({ paymentStatus: 'paid' })
             .where(eq(bookings.stripePaymentIntentId, paymentId));
           await recordLedgerEntry(db, metadata.bookingId, 'charge', amountCents, 'succeeded', paymentId);
+          if (metadata.bookingId) await notifications?.paymentSucceeded(metadata.bookingId);
           break;
         }
 
@@ -231,6 +247,7 @@ export function createPaymentService(deps: PaymentServiceDeps) {
             .set({ paymentStatus: 'failed' })
             .where(eq(bookings.stripePaymentIntentId, paymentId));
           await recordLedgerEntry(db, metadata.bookingId, 'charge', amountCents, 'failed', paymentId);
+          if (metadata.bookingId) await notifications?.paymentFailed(metadata.bookingId);
           break;
         }
 

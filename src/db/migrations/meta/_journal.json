@@ -29,6 +29,13 @@
       "when": 1789576649025,
       "tag": "0003_admin_sign_in",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789578386612,
+      "tag": "0004_notification_bookings",
+      "breakpoints": true
     }
   ]
 }

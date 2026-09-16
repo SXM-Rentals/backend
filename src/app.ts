@@ -31,6 +31,7 @@ import authRoutes from './routes/auth/index.js';
 import bookingRoutes from './routes/bookings/index.js';
 import customerRoutes from './routes/customers/index.js';
 import depositRoutes from './routes/deposits/index.js';
+import notificationRoutes from './routes/notifications/index.js';
 import paymentRoutes from './routes/payments/index.js';
 import providerRoutes from './routes/providers/index.js';
 import vehicleRoutes from './routes/vehicles/index.js';
@@ -38,6 +39,7 @@ import webhookRoutes from './routes/webhooks/index.js';
 import { createAdminAuthService } from './services/admin/auth.js';
 import { createAdminService } from './services/admin/index.js';
 import { createAuthService } from './services/auth/index.js';
+import { createNotificationService } from './services/notifications/index.js';
 import { createPaymentService } from './services/payments/index.js';
 import { createStripeGateway, createUnconfiguredGateway, type PaymentGateway } from './lib/stripe.js';
 
@@ -100,7 +102,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
           currency: config.currency,
         })
       : createUnconfiguredGateway());
-  const payments = createPaymentService({ db, gateway, logger: app.log });
+  // Tells customers what has happened: in the app's notification list, and by
+  // email for the things that warrant one.
+  const notifications = createNotificationService({ db, email, logger: app.log });
+  const payments = createPaymentService({ db, gateway, logger: app.log, notifications });
   const admin = createAdminService({ db, gateway, payments });
 
   // ---- ROUTES ----
@@ -116,7 +121,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(customerRoutes, { prefix: '/customers', auth });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
       await api.register(providerRoutes, { prefix: '/providers', db, gateway, config });
-      await api.register(bookingRoutes, { prefix: '/bookings', db });
+      await api.register(bookingRoutes, { prefix: '/bookings', db, notifications });
+      await api.register(notificationRoutes, { prefix: '/notifications', notifications });
       await api.register(paymentRoutes, { prefix: '/payments', payments });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway });

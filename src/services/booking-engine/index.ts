@@ -164,13 +164,26 @@ function newReference(): string {
   return `SXM-${1000 + Math.floor(Math.random() * 9000)}`;
 }
 
+// Told about bookings as they are made and cancelled, so the customer hears
+// about it. Optional: a booking is never failed because a message could not be
+// sent (see services/notifications).
+export type BookingNotifier = {
+  bookingConfirmed(bookingId: string): Promise<void>;
+  bookingCancelled(bookingId: string): Promise<void>;
+};
+
 // ---- MAKING THE BOOKING ----
-export async function createBooking(db: Database, actor: Actor, input: BookingRequest): Promise<Booking> {
+export async function createBooking(
+  db: Database,
+  actor: Actor,
+  input: BookingRequest,
+  notifier?: BookingNotifier,
+): Promise<Booking> {
   const vehicle = await loadBookableVehicle(db, input.vehicleId);
   assertDatesMakeSense(vehicle, input);
   const quote = quoteBooking(vehicle, input, await commissionRateBps(db));
 
-  return db.transaction(async (tx) => {
+  const created = await db.transaction(async (tx) => {
     // Hold the car's row for the rest of this transaction. Two people booking
     // the same car at the same instant now queue up here, and the second one
     // sees the first one's booking in the check below.
@@ -234,6 +247,10 @@ export async function createBooking(db: Database, actor: Actor, input: BookingRe
 
     return toCustomerBooking(booking, lines, deposit);
   });
+
+  // The booking is already made; telling the customer comes after.
+  await notifier?.bookingConfirmed(created.id);
+  return created;
 }
 
 // ---- READING YOUR OWN BOOKINGS ----
@@ -255,7 +272,12 @@ export async function getBookingFor(db: Database, actor: Actor, bookingId: strin
   return withLinesAndDeposit(db, booking);
 }
 
-export async function cancelBooking(db: Database, actor: Actor, bookingId: string): Promise<Booking> {
+export async function cancelBooking(
+  db: Database,
+  actor: Actor,
+  bookingId: string,
+  notifier?: BookingNotifier,
+): Promise<Booking> {
   const existing = await loadOwnBooking(db, actor, bookingId);
   if (existing.status === 'cancelled') throw conflict('already_cancelled', 'That booking is already cancelled.');
   if (existing.status !== 'upcoming') {
@@ -275,6 +297,7 @@ export async function cancelBooking(db: Database, actor: Actor, bookingId: strin
     .set({ status: 'released', releasedAt: new Date() })
     .where(and(eq(deposits.bookingId, booking.id), ne(deposits.status, 'claimed')));
 
+  await notifier?.bookingCancelled(booking.id);
   return withLinesAndDeposit(db, booking);
 }
 

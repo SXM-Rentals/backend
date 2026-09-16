@@ -64,13 +64,20 @@ export const notifications = pgTable(
     customerId: uuid('customer_id')
       .notNull()
       .references(() => customers.id, { onDelete: 'cascade' }),
+    // Which rental this is about, where it is about one. This is also what
+    // stops a reminder being sent twice: before sending, we look for one of
+    // the same kind already sent about the same booking.
+    bookingId: uuid('booking_id').references(() => bookings.id, { onDelete: 'cascade' }),
     kind: notificationKind('kind').notNull(),
     title: text('title').notNull(),
     body: text('body').notNull(),
     sentAt: moment('sent_at').notNull().defaultNow(),
     readAt: moment('read_at'),
   },
-  (t) => [index('notifications_customer_idx').on(t.customerId, t.sentAt)],
+  (t) => [
+    index('notifications_customer_idx').on(t.customerId, t.sentAt),
+    index('notifications_booking_kind_idx').on(t.bookingId, t.kind),
+  ],
 );
 
 // ---- REWARDS POINTS HISTORY ----

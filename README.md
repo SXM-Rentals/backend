@@ -9,7 +9,7 @@
 The API behind the SXM Rentals website, admin panel and phone app. Fastify on
 Node, Postgres on Neon, TypeScript throughout.
 
-**Phases 1 to 3 are built.** Phase 1 is the foundation: the server, the complete
+**Phases 1 to 3, 5 and 6 are built, plus notifications.** Phase 1 is the foundation: the server, the complete
 database layout, accounts and sign-in, and the security protections every later
 feature sits behind. Phase 2 is the heart of the product: browsing and searching
 cars, working out what a rental costs, and making a booking. Phase 3 is the
@@ -57,6 +57,7 @@ no setup at all. Set `DATABASE_URL` to your own Neon branch to use the real thin
 | `npm run db:generate` | Writes a new SQL migration after you change `src/db/schema/` |
 | `npm run db:migrate` | Applies any migrations not yet applied |
 | `npm run admin:create` | Makes a staff account for the admin panel |
+| `npm run tasks:daily` | The once-a-day job: moves bookings on as dates pass, sends tomorrow's reminders, and prepares payouts |
 
 Node 20.11 or newer. Nothing is deployed anywhere; everything stays on localhost
 until it has been reviewed.
@@ -115,6 +116,7 @@ src/
     payment-splitting/ what each business is owed, and sending it
     provider/          the business dashboard: record, fleet, bookings, payouts
     admin/             staff sign-in, the audit log, and the staff decisions
+    notifications/     telling customers what has happened, in app and by email
     serializers/       database rows → the exact shapes the apps expect
   lib/                 small shared tools: passwords, codes, errors, email, Stripe
   scripts/             commands run by hand, e.g. making a staff account
@@ -126,6 +128,7 @@ test/
   payments.test.ts     charges, deposit holds, claims, Stripe's messages
   provider.test.ts     the business dashboard, fleet, payouts, and its walls
   admin.test.ts        the staff sign-in, the audit log, and staff decisions
+  notifications.test.ts what customers are told, and the once-only reminders
   security.test.ts     headers, CORS, forged requests, rate limits, errors
   rules/               the three product rules
 ```
@@ -170,6 +173,8 @@ Everything lives under `/api/v1`.
 | POST | `/deposits/:id/release` | Give a deposit back — **staff only** |
 | POST | `/deposits/:id/claim` | Keep part of one — **staff only** |
 | POST | `/webhooks/stripe` | What Stripe tells us happened |
+| GET | `/notifications` | Your notifications, newest first |
+| POST | `/notifications/:id/read` · `/read-all` | Mark one, or all, as read |
 | POST | `/providers/apply` | Register a rental business |
 | GET · PATCH | `/providers/me` | The business's own record |
 | GET | `/providers/me/summary` | The dashboard headline figures |
@@ -206,6 +211,32 @@ it checks, so two people booking the same days at the same instant cannot both
 succeed — the second gets a clear "just been booked". A rental from the 1st to
 the 4th uses the nights of the 1st, 2nd and 3rd, so the 4th is free for the next
 person to collect.
+
+---
+
+## What customers are told
+
+Notifications appear in the app's list and, where they genuinely warrant it, by
+email as well: a booking confirmed, a payment that did not go through, a deposit
+released or partly kept, and a reminder the day before collecting or returning a
+car.
+
+**A notification never breaks the thing it is about.** The booking was made, the
+payment arrived, the deposit was released — those have already happened. If
+writing the message or sending the email fails, it is logged and the action
+still stands.
+
+**The wording keeps a deposit apart from a payment**, because that is the thing
+customers most often misread. A released deposit says plainly that it was only
+ever held and never charged; a kept one always carries the written reason staff
+gave.
+
+**Reminders are sent once.** Each one is tied to its booking, so running the
+daily command twice does not message anybody twice.
+
+Notifications are created by the backend when something happens — there is
+deliberately no address an app can call to make one. Push notifications to
+phones come later; they need Expo credentials.
 
 ---
 
