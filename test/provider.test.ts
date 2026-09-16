@@ -336,7 +336,9 @@ describe('the dashboard figures', () => {
     for (const row of performance) {
       expect(row.occupancyRate).toBeGreaterThanOrEqual(0);
       expect(row.occupancyRate).toBeLessThanOrEqual(1);
-      // Enquiries need messaging, which is not built yet.
+      // Enquiries are conversations started with this business. Nobody has
+      // messaged this one, so it is 0 here — see messaging.test.ts for the
+      // case where somebody has.
       expect(row.inquiries).toBe(0);
     }
   });

@@ -9,7 +9,7 @@
 The API behind the SXM Rentals website, admin panel and phone app. Fastify on
 Node, Postgres on Neon, TypeScript throughout.
 
-**Phases 1 to 3, 5 and 6 are built, plus notifications.** Phase 1 is the foundation: the server, the complete
+**Phases 1 to 3, 5 and 6 are built, plus notifications and messaging.** Phase 1 is the foundation: the server, the complete
 database layout, accounts and sign-in, and the security protections every later
 feature sits behind. Phase 2 is the heart of the product: browsing and searching
 cars, working out what a rental costs, and making a booking. Phase 3 is the
@@ -117,6 +117,7 @@ src/
     provider/          the business dashboard: record, fleet, bookings, payouts
     admin/             staff sign-in, the audit log, and the staff decisions
     notifications/     telling customers what has happened, in app and by email
+    messaging/         conversations between a customer and a business
     serializers/       database rows → the exact shapes the apps expect
   lib/                 small shared tools: passwords, codes, errors, email, Stripe
   scripts/             commands run by hand, e.g. making a staff account
@@ -129,6 +130,7 @@ test/
   provider.test.ts     the business dashboard, fleet, payouts, and its walls
   admin.test.ts        the staff sign-in, the audit log, and staff decisions
   notifications.test.ts what customers are told, and the once-only reminders
+  messaging.test.ts    conversations, and the privacy rule around them
   security.test.ts     headers, CORS, forged requests, rate limits, errors
   rules/               the three product rules
 ```
@@ -175,6 +177,9 @@ Everything lives under `/api/v1`.
 | POST | `/webhooks/stripe` | What Stripe tells us happened |
 | GET | `/notifications` | Your notifications, newest first |
 | POST | `/notifications/:id/read` · `/read-all` | Mark one, or all, as read |
+| GET | `/messages/threads` · `/threads/:id` | Your conversations with rental businesses |
+| POST | `/messages/threads` | Start one, or continue an existing one |
+| POST | `/messages/threads/:id/messages` · `/read` | Say something else · mark as read |
 | POST | `/providers/apply` | Register a rental business |
 | GET · PATCH | `/providers/me` | The business's own record |
 | GET | `/providers/me/summary` | The dashboard headline figures |
@@ -183,6 +188,8 @@ Everything lives under `/api/v1`.
 | GET | `/providers/me/performance` | How each car is doing |
 | GET | `/providers/me/bookings` | Bookings across the fleet |
 | GET | `/providers/me/bookings/:id` | One of them |
+| GET | `/providers/me/messages` · `/messages/:id` | Conversations with renters |
+| POST | `/providers/me/messages/:id/messages` · `/read` | Reply · mark as read |
 | GET | `/providers/me/payouts` | What SXM Rentals has paid them |
 | GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |
 | POST | `/admin/auth/login` · `/mfa/enroll` · `/mfa/verify` · `/logout` | Staff sign-in, in two steps |
@@ -211,6 +218,28 @@ it checks, so two people booking the same days at the same instant cannot both
 succeed — the second gets a clear "just been booked". A rental from the 1st to
 the 4th uses the nights of the 1st, 2nd and 3rd, so the 4th is free for the next
 person to collect.
+
+---
+
+## Talking to a rental business
+
+Customers and businesses talk inside SXM Rentals rather than by phone or email.
+That is not a convenience — **it is what lets a business answer a customer
+without ever being given their contact details.** The business's view of a
+conversation is built from a renter summary with no field for a phone number or
+an email address, the same rule as its view of a booking, and a test checks that
+nothing leaks into the response.
+
+A business sees a display name ("Benjamin J.") and whether the person has been
+verified. Either side can attach a car to a message — a customer asking "is this
+one free?", a business answering "this one is cheaper" — and an attached car must
+belong to the business in the conversation, so a thread cannot be used to
+advertise somebody else's fleet.
+
+A message must say something or show a car; the database refuses an empty one.
+Unread counts are per side, and reading a conversation marks the other side's
+messages as read. One customer can never read another's conversation, and
+neither can one business.
 
 ---
 
@@ -419,8 +448,6 @@ Mapped to the Phase 1 list in the Security Hardening Spec.
 - **A real email provider** (see above).
 - **Identity checks (Phase 4).** Skipped on purpose for now — verification is
   handled by hand. The status fields and document tables already exist.
-- **Messaging between a customer and a business.** Neither side has it yet, so
-  the dashboard's "enquiries" figure is 0 rather than an invented number.
 - **Fleet import from a spreadsheet, and the "connect your own system" API** —
   add-ons to the dashboard rather than part of it.
 - **Everything past that** — rewards, notifications and the support agent.

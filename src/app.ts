@@ -31,6 +31,7 @@ import authRoutes from './routes/auth/index.js';
 import bookingRoutes from './routes/bookings/index.js';
 import customerRoutes from './routes/customers/index.js';
 import depositRoutes from './routes/deposits/index.js';
+import messageRoutes from './routes/messages/index.js';
 import notificationRoutes from './routes/notifications/index.js';
 import paymentRoutes from './routes/payments/index.js';
 import providerRoutes from './routes/providers/index.js';
@@ -123,6 +124,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(providerRoutes, { prefix: '/providers', db, gateway, config });
       await api.register(bookingRoutes, { prefix: '/bookings', db, notifications });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications });
+      await api.register(messageRoutes, { prefix: '/messages', db });
       await api.register(paymentRoutes, { prefix: '/payments', payments });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway });

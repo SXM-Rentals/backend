@@ -22,6 +22,10 @@
 //   GET    /providers/me/performance     how each car is doing
 //   GET    /providers/me/bookings        bookings across the fleet
 //   GET    /providers/me/bookings/:id    one of them
+//   GET    /providers/me/messages        conversations with renters
+//   GET    /providers/me/messages/:id    one conversation
+//   POST   /providers/me/messages/:id/messages   reply to it
+//   POST   /providers/me/messages/:id/read       mark it read
 //   GET    /providers/me/payouts         what SXM Rentals has paid them
 //   POST   /providers/me/payout-account  set up where the money goes
 //   GET    /providers/me/payout-account  how that setup is going
@@ -58,6 +62,12 @@ import {
   updateBusinessProfile,
   updateVehicle,
 } from '../../services/provider/index.js';
+import {
+  getThreadForProvider,
+  listThreadsForProvider,
+  markReadAsProvider,
+  replyAsProvider,
+} from '../../services/messaging/index.js';
 import { toProvider } from '../../services/serializers/vehicles.js';
 
 export type ProviderRouteOptions = { db: Database; gateway: PaymentGateway; config: Config };
@@ -132,6 +142,11 @@ const vehicleBody = z.object({
   description: z.string().trim().max(2000).optional(),
 });
 const vehiclePatchBody = vehicleBody.partial();
+// A reply is words, a car to suggest, or both.
+const providerMessageBody = z.object({
+  body: z.string().trim().max(4000).optional(),
+  vehicleId: z.string().max(64).optional(),
+});
 
 export default async function providerRoutes(app: FastifyInstance, options: ProviderRouteOptions) {
   const { db, gateway, config } = options;
@@ -225,6 +240,34 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { providerId } = await businessFor(request);
     const { id } = parseInput(idParam, request.params);
     return getProviderBooking(db, providerId, id);
+  });
+
+  // ---- CONVERSATIONS WITH RENTERS ----
+  // A display name and whether they are verified, never contact details.
+  app.get('/me/messages', async (request) => {
+    const { providerId } = await businessFor(request);
+    return listThreadsForProvider(db, providerId);
+  });
+
+  app.get('/me/messages/:id', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    return getThreadForProvider(db, providerId, id);
+  });
+
+  app.post('/me/messages/:id/messages', async (request, reply) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(providerMessageBody, request.body);
+    const thread = await replyAsProvider(db, providerId, id, body);
+    return reply.status(201).send(thread);
+  });
+
+  app.post('/me/messages/:id/read', async (request, reply) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    await markReadAsProvider(db, providerId, id);
+    return reply.status(204).send();
   });
 
   // ---- MONEY ----
