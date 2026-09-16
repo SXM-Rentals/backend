@@ -263,17 +263,25 @@ describe('the security deposit', () => {
     await post(`/deposits/bookings/${booking.id}/authorize`, {}, asCustomer());
     const [deposit] = await ctx.db.select().from(deposits).where(eq(deposits.bookingId, booking.id));
 
-    const byCustomer = await post(`/deposits/${deposit!.id}/release`, {}, asCustomer());
-    const byStranger = await post(`/deposits/${deposit!.id}/release`, {});
+    // Releasing and keeping a deposit are staff decisions, so they live behind
+    // the staff sign-in and are not on the customer side of the API at all.
+    expect((await post(`/deposits/${deposit!.id}/release`, {}, asCustomer())).statusCode).toBe(404);
+    expect((await post(`/deposits/${deposit!.id}/claim`, { amount: 100, reason: 'Keep it' }, asCustomer())).statusCode).toBe(
+      404,
+    );
+
+    // And the staff addresses refuse a customer and a stranger alike.
+    const byCustomer = await post(`/admin/deposits/${deposit!.id}/release`, { reason: 'Give it back' }, asCustomer());
+    const byStranger = await post(`/admin/deposits/${deposit!.id}/release`, { reason: 'Give it back' });
     const claimAttempt = await post(
-      `/deposits/${deposit!.id}/claim`,
-      { reason: 'I would like to keep this money', amount: 100 },
+      `/admin/deposits/${deposit!.id}/claim`,
+      { amount: 100, reason: 'I would like to keep this money' },
       asCustomer(),
     );
 
-    expect(byCustomer.statusCode).toBe(403);
-    expect(byStranger.statusCode).toBe(403);
-    expect(claimAttempt.statusCode).toBe(403);
+    expect(byCustomer.statusCode).toBe(401);
+    expect(byStranger.statusCode).toBe(401);
+    expect(claimAttempt.statusCode).toBe(401);
 
     const [untouched] = await ctx.db.select().from(deposits).where(eq(deposits.id, deposit!.id));
     expect(untouched!.status).toBe('not_taken');

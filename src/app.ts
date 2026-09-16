@@ -26,6 +26,7 @@ import { registerCors } from './plugins/cors.js';
 import { registerRateLimit } from './plugins/rate-limit.js';
 import { buildLoggerOptions } from './plugins/request-logging.js';
 import { registerSecurityHeaders } from './plugins/security-headers.js';
+import adminRoutes from './routes/admin/index.js';
 import authRoutes from './routes/auth/index.js';
 import bookingRoutes from './routes/bookings/index.js';
 import customerRoutes from './routes/customers/index.js';
@@ -34,6 +35,8 @@ import paymentRoutes from './routes/payments/index.js';
 import providerRoutes from './routes/providers/index.js';
 import vehicleRoutes from './routes/vehicles/index.js';
 import webhookRoutes from './routes/webhooks/index.js';
+import { createAdminAuthService } from './services/admin/auth.js';
+import { createAdminService } from './services/admin/index.js';
 import { createAuthService } from './services/auth/index.js';
 import { createPaymentService } from './services/payments/index.js';
 import { createStripeGateway, createUnconfiguredGateway, type PaymentGateway } from './lib/stripe.js';
@@ -74,7 +77,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   await registerCors(app, config);
   await app.register(cookie);
   await registerRateLimit(app, db);
-  registerAuth(app, { db, config });
+  // Staff sign in through their own realm, checked on every request alongside
+  // the customer one — and never confused with it.
+  const adminAuth = createAdminAuthService({ db, config, logger: app.log });
+  registerAuth(app, { db, config, adminAuth });
 
   // ---- SERVICES ----
   const email =
@@ -95,6 +101,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         })
       : createUnconfiguredGateway());
   const payments = createPaymentService({ db, gateway, logger: app.log });
+  const admin = createAdminService({ db, gateway, payments });
 
   // ---- ROUTES ----
   // Versioned, so a breaking change never strands an older phone-app release.
@@ -113,7 +120,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(paymentRoutes, { prefix: '/payments', payments });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway });
-      // Later phases register verification, provider tools, admin, ... here.
+      await api.register(adminRoutes, { prefix: '/admin', db, config, admin, adminAuth });
+      // Later phases register verification, rewards, notifications, ... here.
     },
     { prefix: '/api/v1' },
   );

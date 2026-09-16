@@ -19,12 +19,16 @@ import type { Config } from '../config.js';
 import type { Database } from '../db/client.js';
 import { forbidden, unauthorized } from '../lib/errors.js';
 import type { Actor } from '../lib/ownership.js';
+import type { AdminActor, AdminAuthService } from '../services/admin/auth.js';
 import { authenticateSession } from '../services/auth/sessions.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
     // The signed-in person, or null.
     actor: Actor | null;
+    // The signed-in member of staff, or null. A completely separate realm from
+    // the customer above: the two can never be confused for one another.
+    adminActor: AdminActor | null;
   }
 }
 
@@ -33,6 +37,12 @@ declare module 'fastify' {
 // HTTPS-only, sent to this exact host, and not readable by other subdomains.
 export function sessionCookieName(config: Config): string {
   return config.isProduction ? '__Host-sxm_session' : 'sxm_session';
+}
+
+// Staff sign in with their own cookie, under a different name, so a customer
+// session and a staff session can never be mistaken for one another.
+export function adminSessionCookieName(config: Config): string {
+  return config.isProduction ? '__Host-sxm_admin' : 'sxm_admin';
 }
 
 // "Bearer abc123" → "abc123"
@@ -44,12 +54,17 @@ function readBearerToken(header: string | undefined): string | undefined {
 
 const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-export function registerAuth(app: FastifyInstance, deps: { db: Database; config: Config }): void {
-  const { db, config } = deps;
+export function registerAuth(
+  app: FastifyInstance,
+  deps: { db: Database; config: Config; adminAuth: AdminAuthService },
+): void {
+  const { db, config, adminAuth } = deps;
   const cookieName = sessionCookieName(config);
+  const adminCookieName = adminSessionCookieName(config);
   const allowedOrigins = new Set(config.corsOrigins);
 
   app.decorateRequest('actor', null);
+  app.decorateRequest('adminActor', null);
 
   app.addHook('preHandler', async (request) => {
     const bearerToken = readBearerToken(request.headers.authorization);
@@ -74,6 +89,12 @@ export function registerAuth(app: FastifyInstance, deps: { db: Database; config:
     } else if (cookieToken) {
       request.actor = await authenticateSession(db, cookieToken, 'cookie');
     }
+
+    // ---- IS THIS A MEMBER OF STAFF? ----
+    // Worked out separately, from its own cookie, and only counts once the
+    // two-factor code has been given.
+    const adminToken = request.cookies[adminCookieName] ?? bearerToken;
+    if (adminToken) request.adminActor = await adminAuth.authenticate(adminToken);
   });
 }
 
@@ -85,11 +106,15 @@ export function requireCustomer(request: FastifyRequest): Actor {
   return request.actor;
 }
 
-// Staff only. The staff sign-in (separate from customers, with mandatory
-// two-factor codes) arrives in Phase 2; until then nobody passes this check,
-// so an admin route added early cannot be reached by accident.
-export function requireAdmin(_request: FastifyRequest): never {
-  throw forbidden('Staff access is not available yet.');
+// Staff only, and only after a two-factor code. Where an address allowlist is
+// configured, the request must also come from one of those addresses — a
+// stolen password and phone are then still not enough from anywhere else.
+export function requireAdmin(request: FastifyRequest, config: Config): AdminActor {
+  if (config.adminIpAllowlist.length > 0 && !config.adminIpAllowlist.includes(request.ip)) {
+    throw forbidden('The admin panel cannot be reached from this address.');
+  }
+  if (!request.adminActor) throw unauthorized('Please sign in to the admin panel.');
+  return request.adminActor;
 }
 
 // Business membership checks live in lib/ownership.ts (assertProviderMember),

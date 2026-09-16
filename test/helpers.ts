@@ -8,8 +8,10 @@
 // business, a car and a booking.
 
 import type { FastifyInstance } from 'fastify';
+import { generate as generateOtp } from 'otplib';
 import { buildApp } from '../src/app.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, type Config } from '../src/config.js';
+import { createAdminAuthService } from '../src/services/admin/auth.js';
 import { connectPglite, type Database } from '../src/db/client.js';
 import { bookings, customers, providers, vehicles } from '../src/db/schema/index.js';
 import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
@@ -23,6 +25,7 @@ export const GOOD_PASSWORD = 'correct horse battery staple';
 export type TestContext = {
   app: FastifyInstance;
   db: Database;
+  config: Config;
   email: MemoryEmailSender;
   // Passwords added here are treated as "found in a data breach".
   breachedPasswords: Set<string>;
@@ -34,12 +37,19 @@ export type TestContext = {
 
 // ---- A PRIVATE COPY OF THE API ----
 export async function createTestContext(
-  options: { extend?: (app: FastifyInstance) => void } = {},
+  options: { extend?: (app: FastifyInstance) => void; env?: Record<string, string> } = {},
 ): Promise<TestContext> {
   const connection = await connectPglite();
   await connection.migrate();
 
-  const config = loadConfig({ NODE_ENV: 'test', CORS_ORIGINS: WEB_ORIGIN, APP_URL: WEB_ORIGIN });
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    CORS_ORIGINS: WEB_ORIGIN,
+    APP_URL: WEB_ORIGIN,
+    // Staff two-factor secrets are encrypted with this before being stored.
+    ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+    ...options.env,
+  });
   const email = createMemoryEmailSender();
   const breachedPasswords = new Set<string>();
   const gateway = createFakeGateway();
@@ -57,6 +67,7 @@ export async function createTestContext(
   return {
     app,
     db: connection.db,
+    config,
     email,
     breachedPasswords,
     gateway,
@@ -269,6 +280,52 @@ export async function signInMobile(ctx: TestContext, email: string, password: st
   const token = res.json()?.session?.token;
   if (res.statusCode !== 200 || typeof token !== 'string') throw new Error(`Mobile sign-in failed: ${res.body}`);
   return token;
+}
+
+// ---- A MEMBER OF STAFF, SIGNED IN ----
+// Staff accounts are made from the server, never through the API, so this
+// creates one directly and then goes through the real sign-in: password, set up
+// an authenticator app, and give a code from it.
+export const ADMIN_COOKIE = 'sxm_admin';
+let staffCounter = 0;
+
+export async function createSignedInStaff(ctx: TestContext, name = 'Nadia Charles') {
+  staffCounter += 1;
+  const email = `staff${staffCounter}@sxmrentals.test`;
+  const password = 'a long staff passphrase';
+
+  const auth = createAdminAuthService({ db: ctx.db, config: ctx.config, logger: { warn: () => {} } });
+  const staff = await auth.createStaff({ name, email, password });
+
+  const login = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/admin/auth/login',
+    payload: { email, password },
+    remoteAddress: uniqueIp(),
+  });
+  const cookieValue = login.cookies.find((c) => c.name === ADMIN_COOKIE)?.value;
+  if (login.statusCode !== 200 || !cookieValue) throw new Error(`Staff sign-in failed: ${login.body}`);
+  const cookie = `${ADMIN_COOKIE}=${cookieValue}`;
+
+  const enroll = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/admin/auth/mfa/enroll',
+    headers: { cookie, origin: WEB_ORIGIN },
+    remoteAddress: uniqueIp(),
+  });
+  if (enroll.statusCode !== 200) throw new Error(`Setting up two-factor failed: ${enroll.body}`);
+  const secret = enroll.json().secret as string;
+
+  const verified = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/admin/auth/mfa/verify',
+    headers: { cookie, origin: WEB_ORIGIN },
+    payload: { code: await generateOtp({ secret }) },
+    remoteAddress: uniqueIp(),
+  });
+  if (verified.statusCode !== 200) throw new Error(`Two-factor code was refused: ${verified.body}`);
+
+  return { staffId: staff.id, name, email, password, cookie, secret };
 }
 
 // ---- A CUSTOMER, A BUSINESS, A CAR AND A BOOKING ----

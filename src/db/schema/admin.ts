@@ -10,13 +10,27 @@
 // turned into a staff account by changing a field.
 
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, jsonb, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  smallint,
+  text,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { createdAt, moment, updatedAt } from './columns.js';
 import { auditAction, auditSubjectType, kycProvider, payoutEntity } from './enums.js';
 
 // ---- STAFF ACCOUNTS ----
-// Sign-in for staff (with mandatory two-factor codes) is built in Phase 2.
-// Until then these columns exist but nothing can sign in with them.
+// Kept completely apart from customers: a customer account can never become a
+// staff account by changing a field, and the two sign-ins share nothing.
+//
+// Two-factor codes are mandatory. A staff account that has not yet set up an
+// authenticator app can sign in only far enough to do so, and nothing else.
 export const adminStaff = pgTable(
   'admin_staff',
   {
@@ -25,13 +39,50 @@ export const adminStaff = pgTable(
     email: text('email').notNull(),
     avatarInitials: text('avatar_initials').notNull(),
     passwordHash: text('password_hash'),
-    // The two-factor secret, stored encrypted by the application — never plain.
+    // The two-factor secret, encrypted by the application before it is stored —
+    // never in plain text, so a copy of the database is not enough to make
+    // valid codes. See lib/crypto.ts.
     mfaSecretEncrypted: text('mfa_secret_encrypted'),
+    // Set the moment a first correct code proves the authenticator app works.
+    mfaEnrolledAt: moment('mfa_enrolled_at'),
+    // Wrong passwords or codes in a row, and when the account may be tried again.
+    failedLoginCount: integer('failed_login_count').notNull().default(0),
+    lockedUntil: moment('locked_until'),
+    lastSignInAt: moment('last_sign_in_at'),
     disabledAt: moment('disabled_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('admin_staff_email_unique').on(t.email)],
+);
+
+// ---- STAFF SIGN-IN SESSIONS ----
+// A separate table from the customers' sessions, so a customer session can
+// never be mistaken for a staff one. Staff sessions expire far sooner than
+// customers': the admin panel is the highest-value target on the platform.
+export const adminSessions = pgTable(
+  'admin_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    staffId: uuid('staff_id')
+      .notNull()
+      .references(() => adminStaff.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    // True only once the two-factor code has been given. A session waiting for
+    // that code can do nothing except finish signing in.
+    mfaPassed: boolean('mfa_passed').notNull().default(false),
+    lastSeenAt: moment('last_seen_at').notNull().defaultNow(),
+    idleExpiresAt: moment('idle_expires_at').notNull(),
+    absoluteExpiresAt: moment('absolute_expires_at').notNull(),
+    revokedAt: moment('revoked_at'),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('admin_sessions_token_hash_unique').on(t.tokenHash),
+    index('admin_sessions_staff_idx').on(t.staffId),
+  ],
 );
 
 // ---- THE AUDIT LOG ----

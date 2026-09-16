@@ -20,6 +20,13 @@ const envSchema = z
     CORS_ORIGINS: z.string().default(''),
     APP_URL: z.string().min(1).default('http://localhost:3000'),
     BREACHED_PASSWORD_CHECK: z.enum(['true', 'false']).default('true'),
+    // The key used to encrypt the most sensitive stored values — today, staff
+    // two-factor secrets. Without it, staff sign-in refuses to work rather than
+    // storing a secret in plain text.
+    ENCRYPTION_KEY: z.string().min(1).optional(),
+    // Addresses allowed to reach the admin API, comma separated. Empty means no
+    // address restriction (two-factor still applies).
+    ADMIN_IP_ALLOWLIST: z.string().default(''),
     // Stripe. Until these are set, the payment and deposit endpoints answer
     // "not switched on yet" rather than pretending to take money.
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
@@ -35,6 +42,13 @@ const envSchema = z
     if (env.NODE_ENV !== 'production') return;
     if (!env.DATABASE_URL) {
       ctx.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: 'is required in production' });
+    }
+    if (!env.ENCRYPTION_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ENCRYPTION_KEY'],
+        message: 'is required in production (staff two-factor secrets are encrypted with it)',
+      });
     }
     for (const origin of splitList(env.CORS_ORIGINS)) {
       if (!origin.startsWith('https://')) {
@@ -57,6 +71,8 @@ export type Config = {
   corsOrigins: string[];
   appUrl: string;
   breachedPasswordCheck: boolean;
+  encryptionKey: string | undefined;
+  adminIpAllowlist: string[];
   stripeSecretKey: string | undefined;
   stripeWebhookSecret: string | undefined;
   currency: string;
@@ -98,6 +114,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins: splitList(env.CORS_ORIGINS),
     appUrl: env.APP_URL.replace(/\/+$/, ''),
     breachedPasswordCheck: env.BREACHED_PASSWORD_CHECK === 'true',
+    encryptionKey: env.ENCRYPTION_KEY,
+    adminIpAllowlist: splitList(env.ADMIN_IP_ALLOWLIST),
     stripeSecretKey: env.STRIPE_SECRET_KEY,
     stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
     currency: env.CURRENCY.toLowerCase(),

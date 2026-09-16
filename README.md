@@ -18,10 +18,13 @@ Stripe tells us afterwards.
 
 Phase 5 is the business side: a rental business registering, its own record, its
 fleet, the bookings across that fleet, and being paid through Stripe Connect.
+Phase 6 is the staff admin panel: signing in with an authenticator code,
+approving businesses and vehicles, deciding refunds, settling deposits and
+disputes — with every change written into an audit log.
 
 Identity checks (Phase 4) are deliberately skipped for now and handled by hand.
-Admin tools, rewards, notifications, messaging and the support agent arrive
-later; their folders exist as clearly marked placeholders.
+Rewards, notifications, messaging and the support agent arrive later; their
+folders exist as clearly marked placeholders.
 
 **Stripe is not connected yet.** Until `STRIPE_SECRET_KEY` is set, the payment
 and deposit endpoints answer "not switched on yet" rather than appearing to take
@@ -53,6 +56,7 @@ no setup at all. Set `DATABASE_URL` to your own Neon branch to use the real thin
 | `npm run test:watch` | The test suite, re-running as files change |
 | `npm run db:generate` | Writes a new SQL migration after you change `src/db/schema/` |
 | `npm run db:migrate` | Applies any migrations not yet applied |
+| `npm run admin:create` | Makes a staff account for the admin panel |
 
 Node 20.11 or newer. Nothing is deployed anywhere; everything stays on localhost
 until it has been reviewed.
@@ -77,6 +81,8 @@ readable list, if any are wrong — and production is stricter: it requires
 | `APP_URL` | The customer website, for links inside emails |
 | `TRUST_PROXY_HOPS` | Proxies in front of the server (Render = 1), to see real visitor addresses |
 | `BREACHED_PASSWORD_CHECK` | `false` skips the leaked-password check (e.g. offline) |
+| `ENCRYPTION_KEY` | Encrypts staff two-factor secrets. **Required in production**; without it, staff sign-in refuses to work rather than storing one in plain text |
+| `ADMIN_IP_ALLOWLIST` | Addresses allowed to reach the admin panel. Empty means no address restriction |
 | `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
 | `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
 | `CURRENCY` | What bookings are charged in (`usd`) |
@@ -108,8 +114,10 @@ src/
     payments/          charges, deposit holds, and what Stripe tells us after
     payment-splitting/ what each business is owed, and sending it
     provider/          the business dashboard: record, fleet, bookings, payouts
+    admin/             staff sign-in, the audit log, and the staff decisions
     serializers/       database rows → the exact shapes the apps expect
   lib/                 small shared tools: passwords, codes, errors, email, Stripe
+  scripts/             commands run by hand, e.g. making a staff account
   types/api.ts         the response shapes, copied from sxm-rentals-web
 test/
   auth.test.ts         every account journey, from the outside
@@ -117,6 +125,7 @@ test/
   bookings.test.ts     prices, making and cancelling bookings, double-booking
   payments.test.ts     charges, deposit holds, claims, Stripe's messages
   provider.test.ts     the business dashboard, fleet, payouts, and its walls
+  admin.test.ts        the staff sign-in, the audit log, and staff decisions
   security.test.ts     headers, CORS, forged requests, rate limits, errors
   rules/               the three product rules
 ```
@@ -171,6 +180,13 @@ Everything lives under `/api/v1`.
 | GET | `/providers/me/bookings/:id` | One of them |
 | GET | `/providers/me/payouts` | What SXM Rentals has paid them |
 | GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |
+| POST | `/admin/auth/login` · `/mfa/enroll` · `/mfa/verify` · `/logout` | Staff sign-in, in two steps |
+| GET | `/admin/summary` · `/admin/queue` · `/admin/audit` | The dashboard, what is waiting, who changed what |
+| GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
+| GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
+| GET | `/admin/bookings` · `/admin/payments` · `/admin/payouts` | Read-only views across the platform |
+| GET · POST | `/admin/deposits…` | Release a deposit, or keep part of it with a written reason |
+| GET · POST | `/admin/refunds…` `/admin/disputes…` | Decide refunds; assign and resolve disputes |
 
 Browsing is public: somebody searching for a car has not signed in yet, and a
 search result needs to be able to appear in Google. Only cars staff have
@@ -190,6 +206,48 @@ it checks, so two people booking the same days at the same instant cannot both
 succeed — the second gets a clear "just been booked". A rental from the 1st to
 the 4th uses the nights of the 1st, 2nd and 3rd, so the 4th is free for the next
 person to collect.
+
+---
+
+## The admin panel
+
+The highest-value door on the platform: it opens onto every customer's details,
+every booking and every movement of money. It is deliberately stricter than the
+customer sign-in.
+
+**Staff are a separate world.** Their own table, their own sessions, their own
+cookie. A customer account can never become a staff account by changing a field,
+and a customer's sign-in is worthless here.
+
+**Two steps, always.** A correct password alone gets a session that can do
+exactly one thing: finish signing in. A code from an authenticator app is
+required — not optional — and the secret behind it is encrypted before it is
+stored, so a copy of the database is not enough to make working codes. Wrong
+passwords and wrong codes count towards the same lockout.
+
+**Sessions are short:** half an hour idle, eight hours at the very most, against
+the customer app's seven and thirty days.
+
+**Every change is recorded.** Who did it, what they acted on, which field, what
+it was before, what it is now, and the reason they gave. There is no way to
+change anything without a reason: the audit helper refuses a blank one, and so
+does the database. Nothing ever edits or deletes a log entry.
+
+**Some things staff still cannot do:** close an account while a rental is
+running or a deposit is held (that would strand money nobody can reclaim), keep
+more of a deposit than was held, or keep any of it without writing down why.
+
+**Making the first staff account** (there is deliberately no web address that
+creates one — nobody can grant themselves access through the panel):
+
+```bash
+npm run admin:create -- "Full Name" name@example.com "a long passphrase"
+```
+
+They then sign in, set up an authenticator app, and use a code from it every
+time after that. Set `ADMIN_IP_ALLOWLIST` to limit the panel to your office or
+VPN addresses as well; left empty, any address may reach it and the code is the
+only barrier.
 
 ---
 
@@ -317,13 +375,15 @@ Mapped to the Phase 1 list in the Security Hardening Spec.
 | Input validation | Done for every current route (Zod) |
 | Card data | Never touches this server: the apps send it straight to Stripe with a one-time secret |
 | Signed webhooks | Done: Stripe's messages are verified against our signing secret over the exact bytes sent, and a repeat is recorded and ignored |
+| Staff sign-in | Done: its own realm, mandatory authenticator codes, encrypted two-factor secrets, 30-minute idle / 8-hour sessions, shared lockout, optional IP allowlist |
+| Audit trail | Done: every staff change records who, what, before, after and a required reason; entries are only ever added |
 | AI budget caps | Not yet: there are no AI calls yet (Phase 8) |
 
 **Deliberately not built yet:**
 
-- **Staff sign-in.** The admin panel's separate sign-in, with mandatory two-factor
-  codes, is Phase 2. Until then `requireAdmin` refuses everyone, so an admin
-  route added early cannot be reached.
+- **Promo codes, the rewards configuration, platform settings and analytics.**
+  The admin panel calls these too; they are screens over settings rather than
+  the daily decisions, so they come later.
 - **Sign in with Apple and Google.** Needs developer-account keys.
 - **A real email provider** (see above).
 - **Identity checks (Phase 4).** Skipped on purpose for now — verification is
@@ -332,8 +392,7 @@ Mapped to the Phase 1 list in the Security Hardening Spec.
   the dashboard's "enquiries" figure is 0 rather than an invented number.
 - **Fleet import from a spreadsheet, and the "connect your own system" API** —
   add-ons to the dashboard rather than part of it.
-- **Everything past that** — admin tools, rewards, notifications and the support
-  agent.
+- **Everything past that** — rewards, notifications and the support agent.
 
 **Known dependency advisory:** `npm audit` reports 4 moderate advisories, all
 inside `drizzle-kit` (the migration generator). It bundles an old esbuild with a
