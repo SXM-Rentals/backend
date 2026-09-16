@@ -59,8 +59,9 @@ no setup at all. Set `DATABASE_URL` to your own Neon branch to use the real thin
 | `npm run admin:create` | Makes a staff account for the admin panel |
 | `npm run tasks:daily` | The once-a-day job: moves bookings on as dates pass, sends tomorrow's reminders, and prepares payouts |
 
-Node 20.11 or newer. Nothing is deployed anywhere; everything stays on localhost
-until it has been reviewed.
+Node 20.11 or newer (CI and Render use the version in `.nvmrc`). Nothing is
+deployed anywhere yet; everything stays on localhost until it has been reviewed.
+See **Putting it live** below when you are ready.
 
 **Migrations never run by themselves.** The server does not touch the database
 layout when it starts. On deploy, `npm run db:migrate` is its own explicit step
@@ -122,6 +123,8 @@ src/
   lib/                 small shared tools: passwords, codes, errors, email, Stripe
   scripts/             commands run by hand, e.g. making a staff account
   types/api.ts         the response shapes, copied from sxm-rentals-web
+render.yaml            how the API and the daily job run on Render
+.github/workflows/     the checks GitHub runs on every push
 test/
   auth.test.ts         every account journey, from the outside
   vehicles.test.ts     searching, filtering, availability, reviews
@@ -471,6 +474,64 @@ running API, and we never run its dev server. Revisit when drizzle-kit updates.
 
 ---
 
+## Putting it live
+
+Nothing is deployed yet. When you are ready, this is the order.
+
+**1. The database (Neon).** Make a branch per environment — `dev`, `staging`,
+`production` — and copy the production branch's connection string. Neon's
+branching means staging can be a copy of production's structure without
+duplicating storage.
+
+**2. The keys.** Generate the encryption key once and keep it safe; changing it
+later makes every staff member set up their authenticator app again:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+From Stripe, take the **test** keys first (`sk_test_…`) and switch to live only
+when you are ready to take real money. The webhook signing secret comes from
+Stripe's webhook settings, where you point it at
+`https://your-api/api/v1/webhooks/stripe`.
+
+**3. The service (Render).** `render.yaml` describes both the API and the daily
+job, so Render can read the setup from the repository instead of it being
+clicked together in a dashboard. Set the values marked `sync: false` in the
+dashboard — they are deliberately not in the file. Change `APP_URL` and
+`CORS_ORIGINS` to your real domains before the first deploy.
+
+**4. Migrations run before the new version goes live**, as their own step
+(`preDeployCommand`). If one fails the deploy stops and the old version keeps
+serving.
+
+**5. The first staff account**, once the API is up:
+
+```bash
+npm run admin:create -- "Full Name" name@example.com "a long passphrase"
+```
+
+Then sign in, set up an authenticator app, and add `ADMIN_IP_ALLOWLIST` if you
+have fixed office or VPN addresses.
+
+**6. Point the apps at it.** Each app has a single `lib/api-client.ts`; that is
+the only file that needs to change.
+
+### Before you take real money
+
+- [ ] `ENCRYPTION_KEY` set — **production refuses to start without it**
+- [ ] `CORS_ORIGINS` lists only your real sites, over `https`
+- [ ] Stripe switched from test keys to live keys, webhook pointed at the API
+- [ ] An email provider connected in `src/lib/email.ts` — until then production
+      refuses to send and logs it, so password resets will not arrive
+- [ ] The daily job running (bookings move on, reminders go out, payouts are
+      prepared)
+- [ ] A Neon backup schedule you have actually restored from once
+- [ ] Identity checks decided — they are manual today
+- [ ] `npm audit` clean for what ships (CI checks this on every push)
+
+---
+
 ## A note on the file headers
 
 Every file opens with three lines: who wrote it, the copyright, and a
@@ -478,6 +539,9 @@ plain-language description of what the file does — written so somebody who is
 not a developer can read it. Inside a file, each meaningful block is labelled
 for what it does in the same plain words. Keep the description when you edit a
 file; rewrite it when the file's job changes.
+
+The one exception is `.nvmrc`, which may contain a version number and nothing
+else — a comment in it would break the tools that read it.
 
 The attribution belongs in the source and nowhere else — never in an API
 response or anything an app shows.

@@ -1,0 +1,88 @@
+# SXM Rentals — Created by Giordano Bertin-Maurice
+# Copyright (c) 2026 Giordano Bertin-Maurice. All rights reserved.
+# WHAT THIS FILE DOES: Describes how this backend runs on Render, so the setup
+# lives in the repository and is reviewed like code rather than being clicked
+# together in a dashboard and forgotten.
+#
+# It describes two things:
+#   1. the API itself, and
+#   2. a small job that runs once a day (bookings move on as dates pass,
+#      tomorrow's reminders go out, and each business's payout is prepared).
+#
+# TWO DELIBERATE CHOICES:
+#
+# MIGRATIONS RUN BEFORE THE NEW VERSION GOES LIVE, as their own step, never
+# silently when the server boots. If a migration fails the deploy stops and the
+# old version keeps serving, which is the safe way round.
+#
+# NO SECRET IS IN THIS FILE. Everything sensitive is marked "sync: false",
+# which means Render asks for the value once and keeps it. This file is in git;
+# the keys never are.
+
+services:
+  - type: web
+    name: sxm-rentals-api
+    runtime: node
+    plan: starter
+    region: ohio
+    branch: main
+    buildCommand: npm ci && npm run build
+    # The database is brought up to date first; the server only starts if that
+    # succeeded.
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    # Render restarts the service if this stops answering. It checks the
+    # database too, so a server that cannot reach Neon is treated as unhealthy.
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        # Render routes to the container's own address, not localhost.
+        value: 0.0.0.0
+      - key: TRUST_PROXY_HOPS
+        # Render puts one proxy in front of the service. This is what lets the
+        # rate limiter see each visitor's real address.
+        value: 1
+      - key: APP_URL
+        # The customer website, used for links inside emails.
+        value: https://sxmrentals.com
+      - key: CORS_ORIGINS
+        # Only our own sites may call this API from a browser. Add the admin
+        # panel's address here as well once it has one.
+        value: https://sxmrentals.com,https://www.sxmrentals.com
+      - key: LOG_LEVEL
+        value: info
+      # ---- SECRETS: set in the Render dashboard, never in this file ----
+      - key: DATABASE_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      # Addresses allowed to reach the admin panel. Leave unset for none.
+      - key: ADMIN_IP_ALLOWLIST
+        sync: false
+
+  - type: cron
+    name: sxm-rentals-daily
+    runtime: node
+    plan: starter
+    region: ohio
+    branch: main
+    # 06:00 UTC is early morning on the island, so a reminder about tomorrow
+    # arrives at a sensible hour rather than in the middle of the night.
+    schedule: '0 6 * * *'
+    buildCommand: npm ci
+    startCommand: npm run tasks:daily
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_URL
+        value: https://sxmrentals.com
+      - key: DATABASE_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false

@@ -1,0 +1,52 @@
+# SXM Rentals — Created by Giordano Bertin-Maurice
+# Copyright (c) 2026 Giordano Bertin-Maurice. All rights reserved.
+# WHAT THIS FILE DOES: Runs the same checks on GitHub that you run on your own
+# machine — the type checker, the whole test suite, and a look at the installed
+# packages for known security problems — every time code is pushed or a pull
+# request is opened.
+#
+# WHY IT MATTERS: it is what stops a broken version reaching the branch Render
+# deploys from. The tests need no database, no Stripe account and no keys: each
+# test file builds its own Postgres inside the process and talks to a stand-in
+# Stripe, so this runs anywhere, for free, in about two minutes.
+
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Kept in step with .nvmrc, so CI builds on the same Node as the server.
+          node-version-file: .nvmrc
+          cache: npm
+
+      # ci, not install: it installs exactly what the lockfile says, so a
+      # version cannot drift between here and production.
+      - name: Install
+        run: npm ci
+
+      - name: Types
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Fails only on a high or critical problem in something that actually
+      # ships. Development-only tools are reported but do not stop the build,
+      # because they never run on the server.
+      - name: Known vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
