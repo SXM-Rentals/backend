@@ -129,9 +129,10 @@ export async function signInMobile(ctx: TestContext, email: string, password: st
 }
 
 // ---- A CUSTOMER, A BUSINESS, A CAR AND A BOOKING ----
-// Inserted straight into the database, for tests about the data rules.
+// Inserted straight into the database, for tests about data rules and searching.
 let seedCounter = 0;
-export async function seedBooking(db: Database) {
+
+export async function seedCustomer(db: Database, overrides: Partial<typeof customers.$inferInsert> = {}) {
   seedCounter += 1;
   const [customer] = await db
     .insert(customers)
@@ -142,17 +143,32 @@ export async function seedBooking(db: Database) {
       phone: '+1 721 555 0142',
       accountType: 'tourist',
       verificationStatus: 'approved',
+      ...overrides,
     })
     .returning();
+  return customer!;
+}
+
+export async function seedProvider(db: Database, overrides: Partial<typeof providers.$inferInsert> = {}) {
   const [provider] = await db
     .insert(providers)
-    .values({ businessName: 'Island Wheels', side: 'dutch', town: 'Philipsburg' })
+    .values({ businessName: 'Island Wheels', side: 'dutch', town: 'Philipsburg', ...overrides })
     .returning();
+  return provider!;
+}
+
+// Listed and approved by default, because that is what a customer can book.
+export async function seedVehicle(
+  db: Database,
+  providerId: string,
+  overrides: Partial<typeof vehicles.$inferInsert> = {},
+) {
+  seedCounter += 1;
   const [vehicle] = await db
     .insert(vehicles)
     .values({
       reference: `SXM-V-${100 + seedCounter}`,
-      providerId: provider!.id,
+      providerId,
       make: 'Suzuki',
       model: 'Jimny',
       year: 2024,
@@ -167,15 +183,30 @@ export async function seedBooking(db: Database) {
       side: 'dutch',
       latitude: 18.026,
       longitude: -63.045,
+      listingStatus: 'live',
+      ...overrides,
     })
     .returning();
+  return vehicle!;
+}
+
+// A date a given number of days from today, as YYYY-MM-DD.
+export function dateIn(days: number): string {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export async function seedBooking(db: Database) {
+  seedCounter += 1;
+  const customer = await seedCustomer(db);
+  const provider = await seedProvider(db);
+  const vehicle = await seedVehicle(db, provider.id);
   const [booking] = await db
     .insert(bookings)
     .values({
       reference: `SXM-${4800 + seedCounter}`,
-      customerId: customer!.id,
-      vehicleId: vehicle!.id,
-      providerId: provider!.id,
+      customerId: customer.id,
+      vehicleId: vehicle.id,
+      providerId: provider.id,
       startDate: '2026-10-01',
       endDate: '2026-10-04',
       pickupTime: '10:00',
@@ -189,5 +220,5 @@ export async function seedBooking(db: Database) {
     })
     .returning();
 
-  return { customer: customer!, provider: provider!, vehicle: vehicle!, booking: booking! };
+  return { customer, provider, vehicle, booking: booking! };
 }

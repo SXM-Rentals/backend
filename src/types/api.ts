@@ -34,6 +34,82 @@ export type User = {
   memberSince: string;
 };
 
+// ---- RENTAL BUSINESSES ----
+// PUBLIC information only — everything here appears on the business's page.
+export type Provider = {
+  id: string;
+  businessName: string;
+  side: 'dutch' | 'french';
+  town: string;
+  rating: number;
+  reviewCount: number;
+  isVerified: boolean;
+  respondsIn: string;
+  phone: string;
+  description: string;
+  deliversVehicles: boolean;
+  airportPickup: boolean;
+  memberSince: string;
+};
+
+// ---- VEHICLES ----
+export type VehicleType = 'car' | 'atv' | 'boat' | 'bike';
+export type VehicleClass = 'economy' | 'compact' | 'suv' | 'van' | 'fourByFour' | 'luxury';
+export type Transmission = 'automatic' | 'manual';
+export type FuelType = 'petrol' | 'diesel' | 'hybrid' | 'electric';
+
+// Damage the business declared when listing the car. SXM Rentals does not
+// independently verify these — the apps always say so.
+export type AccidentRecord = {
+  date: string;
+  description: string;
+  repaired: boolean;
+};
+
+export type Vehicle = {
+  id: string;
+  type: VehicleType;
+  make: string;
+  model: string;
+  year: number;
+  trim?: string;
+  vehicleClass: VehicleClass;
+  transmission: Transmission;
+  fuel: FuelType;
+  seats: number;
+  doors: number;
+  airConditioning: boolean;
+  photos: string[];
+  providerId: string;
+  dailyRate: number;
+  weeklyRate?: number;
+  minimumDays: number;
+  maximumDays: number;
+  depositAmount: number;
+  depositIsVehicleSpecific: boolean;
+  pickupTown: string;
+  side: 'dutch' | 'french';
+  deliveryAvailable: boolean;
+  deliveryFee?: number;
+  latitude: number;
+  longitude: number;
+  rating: number;
+  reviewCount: number;
+  accidentHistory: AccidentRecord[];
+  unavailableDates: string[]; // days already booked, as YYYY-MM-DD
+  description: string;
+};
+
+// ---- REVIEWS ----
+export type Review = {
+  id: string;
+  vehicleId: string;
+  authorName: string;
+  rating: number;
+  date: string;
+  body: string;
+};
+
 // ---- BOOKINGS ----
 export type BookingStatus = 'upcoming' | 'active' | 'completed' | 'cancelled';
 

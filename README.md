@@ -9,10 +9,15 @@
 The API behind the SXM Rentals website, admin panel and phone app. Fastify on
 Node, Postgres on Neon, TypeScript throughout.
 
-**This is Phase 1 — the foundation.** The server, the complete database layout,
-accounts and sign-in, and the security protections every later feature sits
-behind. Vehicles, bookings, payments and the rest arrive in later phases; their
-folders already exist as clearly marked placeholders.
+**Phases 1 and 2 are built.** Phase 1 is the foundation: the server, the
+complete database layout, accounts and sign-in, and the security protections
+every later feature sits behind. Phase 2 is the heart of the product: browsing
+and searching cars, working out what a rental costs, and making a booking.
+
+Payments, identity checks, the business dashboard, admin tools, rewards,
+notifications and the support agent arrive in later phases; their folders exist
+as clearly marked placeholders. **No money moves yet** — a booking is recorded
+with its price worked out and its deposit listed as "not taken".
 
 ---
 
@@ -86,11 +91,15 @@ src/
   routes/              the web addresses, under /api/v1
   services/            the business logic, kept out of the routes
     auth/              accounts, sign-in, sessions
+    availability-engine/  is this car free, and which days are taken
+    booking-engine/    what a rental costs, and making the booking
     serializers/       database rows → the exact shapes the apps expect
   lib/                 small shared tools: passwords, codes, errors, email
   types/api.ts         the response shapes, copied from sxm-rentals-web
 test/
   auth.test.ts         every account journey, from the outside
+  vehicles.test.ts     searching, filtering, availability, reviews
+  bookings.test.ts     prices, making and cancelling bookings, double-booking
   security.test.ts     headers, CORS, forged requests, rate limits, errors
   rules/               the three product rules
 ```
@@ -119,6 +128,34 @@ Everything lives under `/api/v1`.
 | GET | `/auth/sessions` | The devices you are signed in on |
 | DELETE | `/auth/sessions/:id` | Sign out one of them |
 | GET | `/customers/me` | Your own account, in the apps' `User` shape |
+| GET | `/vehicles` | Search and filter cars — every filter the Search screen offers |
+| GET | `/vehicles/:id` | One car, with its photos, declared damage and booked days |
+| GET | `/vehicles/:id/reviews` | Its reviews |
+| GET | `/providers` | The rental businesses |
+| GET | `/providers/:id` | One business's public page |
+| POST | `/bookings/quote` | What a rental would cost, before booking anything |
+| POST | `/bookings` | Make a booking |
+| GET | `/bookings` | Your own bookings |
+| GET | `/bookings/:id` | One of your own bookings |
+| POST | `/bookings/:id/cancel` | Cancel one that has not started |
+
+Browsing is public: somebody searching for a car has not signed in yet, and a
+search result needs to be able to appear in Google. Only cars staff have
+approved are ever returned, and lists are capped and paged. Everything to do
+with a booking needs you to be signed in.
+
+**What a rental costs.** Whole weeks at the business's weekly price where they
+offer one, then the remaining days at the daily price, plus delivery if the car
+is being brought to the customer, plus a 5% SXM Rentals service fee — worked out
+on the rental alone, never on the delivery charge. SXM Rentals keeps 30% of the
+total (a platform setting), and the rest is the business's, to the cent. **The
+deposit is never part of any of that**; it comes back beside the total.
+
+**The same car cannot be booked twice.** A booking locks the car's record while
+it checks, so two people booking the same days at the same instant cannot both
+succeed — the second gets a clear "just been booked". A rental from the 1st to
+the 4th uses the nights of the 1st, 2nd and 3rd, so the 4th is free for the next
+person to collect.
 
 **The website and the phone app sign in differently.** The website gets an
 httpOnly cookie that page scripts cannot read. The phone app sends
@@ -193,8 +230,9 @@ Mapped to the Phase 1 list in the Security Hardening Spec.
   route added early cannot be reached.
 - **Sign in with Apple and Google.** Needs developer-account keys.
 - **A real email provider** (see above).
-- **Everything past accounts** — vehicles, availability, bookings, Stripe,
-  identity checks, rewards, notifications, the support agent.
+- **Everything past bookings** — Stripe payments and the deposit hold, identity
+  checks, the business dashboard, admin tools, rewards, notifications and the
+  support agent.
 
 **Known dependency advisory:** `npm audit` reports 4 moderate advisories, all
 inside `drizzle-kit` (the migration generator). It bundles an old esbuild with a

@@ -27,7 +27,10 @@ import { registerRateLimit } from './plugins/rate-limit.js';
 import { buildLoggerOptions } from './plugins/request-logging.js';
 import { registerSecurityHeaders } from './plugins/security-headers.js';
 import authRoutes from './routes/auth/index.js';
+import bookingRoutes from './routes/bookings/index.js';
 import customerRoutes from './routes/customers/index.js';
+import providerRoutes from './routes/providers/index.js';
+import vehicleRoutes from './routes/vehicles/index.js';
 import { createAuthService } from './services/auth/index.js';
 
 export type AppDependencies = {
@@ -85,7 +88,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       });
       await api.register(authRoutes, { prefix: '/auth', auth, config });
       await api.register(customerRoutes, { prefix: '/customers', auth });
-      // Later phases register vehicles, bookings, payments, ... here.
+      await api.register(vehicleRoutes, { prefix: '/vehicles', db });
+      await api.register(providerRoutes, { prefix: '/providers', db });
+      await api.register(bookingRoutes, { prefix: '/bookings', db });
+      // Later phases register payments, deposits, verification, ... here.
     },
     { prefix: '/api/v1' },
   );

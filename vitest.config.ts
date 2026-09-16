@@ -10,8 +10,12 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    // One test file at a time. Each one starts its own complete Postgres inside
+    // this process and builds all 30 tables; several of those racing each other
+    // starve the machine and the whole suite ends up slower, not faster.
+    fileParallelism: false,
     // Building the database from the migrations takes a moment on first run.
-    testTimeout: 30_000,
-    hookTimeout: 60_000,
+    testTimeout: 60_000,
+    hookTimeout: 120_000,
   },
 });
