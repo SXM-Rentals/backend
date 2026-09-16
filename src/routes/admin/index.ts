@@ -18,6 +18,7 @@
 //   GET  /admin/summary           the headline figures
 //   GET  /admin/queue             everything waiting, oldest first
 //   GET  /admin/audit             who changed what, and why
+//   GET  /admin/analytics         money, bookings and sign-ups over time
 //   users · providers · vehicles · bookings · deposits · refunds · disputes
 //   payments (ledger and payouts, read only) · staff
 
@@ -60,6 +61,11 @@ const userPatchBody = z.object({
   reason,
 });
 const assignBody = z.object({ staffId: z.string().max(64), reason });
+const analyticsQuery = z.object({
+  months: z.coerce.number().int().min(1).max(60).optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+});
 const resolveBody = z.object({ notes: z.string().trim().min(3).max(4000), reason });
 const listQuery = z.object({
   search: z.string().trim().max(120).optional(),
@@ -150,6 +156,15 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   app.get('/staff', async (request) => {
     staff(request);
     return admin.listStaff();
+  });
+
+  // ---- ANALYTICS ----
+  // Either the last few whole months, or any two dates. The bars are bucketed
+  // by day, week, month or quarter to suit the span.
+  app.get('/analytics', async (request) => {
+    staff(request);
+    const query = parseInput(analyticsQuery, request.query);
+    return admin.getAnalytics(query);
   });
 
   // ================= CUSTOMERS =================

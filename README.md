@@ -131,6 +131,7 @@ test/
   admin.test.ts        the staff sign-in, the audit log, and staff decisions
   notifications.test.ts what customers are told, and the once-only reminders
   messaging.test.ts    conversations, and the privacy rule around them
+  analytics.test.ts    the charts: bucket widths, and what counts as money
   security.test.ts     headers, CORS, forged requests, rate limits, errors
   rules/               the three product rules
 ```
@@ -194,6 +195,7 @@ Everything lives under `/api/v1`.
 | GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |
 | POST | `/admin/auth/login` · `/mfa/enroll` · `/mfa/verify` · `/logout` | Staff sign-in, in two steps |
 | GET | `/admin/summary` · `/admin/queue` · `/admin/audit` | The dashboard, what is waiting, who changed what |
+| GET | `/admin/analytics` | Money, bookings and sign-ups over time (`?months=` or `?from=&to=`) |
 | GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | GET | `/admin/bookings` · `/admin/payments` · `/admin/payouts` | Read-only views across the platform |
@@ -296,6 +298,13 @@ does the database. Nothing ever edits or deletes a log entry.
 **Some things staff still cannot do:** close an account while a rental is
 running or a deposit is held (that would strand money nobody can reclaim), keep
 more of a deposit than was held, or keep any of it without writing down why.
+
+**The analytics charts choose their own bar width.** A short range is counted by
+day, a season by week, a year by month and several years by quarter, so the
+shape of the question stays visible instead of the person having to phrase the
+question to suit the chart. Money is counted by when a booking was *made*, a
+cancelled booking is counted but brings in nothing, and security deposits appear
+in no total anywhere — they are the customer's money being held.
 
 **Making the first staff account** (there is deliberately no web address that
 creates one — nobody can grant themselves access through the panel):
@@ -441,9 +450,12 @@ Mapped to the Phase 1 list in the Security Hardening Spec.
 
 **Deliberately not built yet:**
 
-- **Promo codes, the rewards configuration, platform settings and analytics.**
-  The admin panel calls these too; they are screens over settings rather than
-  the daily decisions, so they come later.
+- **Promo codes, the rewards configuration and platform settings.** The admin
+  panel calls these too; they are screens over settings rather than the daily
+  decisions, so they come later.
+- **The rewards scheme itself.** Points, tiers and Islander benefits are not
+  built. The staff view labels a customer's tier from their points ledger, but
+  nothing awards points yet.
 - **Sign in with Apple and Google.** Needs developer-account keys.
 - **A real email provider** (see above).
 - **Identity checks (Phase 4).** Skipped on purpose for now — verification is

@@ -47,6 +47,7 @@ import {
   toDisputeCase,
   toRefundRequest,
 } from '../serializers/admin.js';
+import { buildMonthlySeries, buildSeries } from './analytics.js';
 import type { AdminActor } from './auth.js';
 import { recordAudit } from './audit.js';
 
@@ -904,6 +905,21 @@ export function createAdminService(deps: AdminServiceDeps) {
         status: row.payout.status,
         ...(row.payout.paidOn ? { paidOn: row.payout.paidOn.toISOString().slice(0, 10) } : {}),
       }));
+    },
+
+    // ================= ANALYTICS =================
+    // Money taken, bookings made and people who signed up, bucketed to suit the
+    // span asked about. See services/admin/analytics.ts for why the bucket
+    // follows the question rather than the other way round.
+
+    async getAnalytics(query: { months?: number | undefined; from?: string | undefined; to?: string | undefined }) {
+      if (query.from && query.to) {
+        if (query.from > query.to) {
+          throw badRequest('invalid_range', 'The start of the range has to be before the end.');
+        }
+        return buildSeries(db, query.from, query.to);
+      }
+      return buildMonthlySeries(db, query.months ?? 6);
     },
 
     // Staff names, for assigning disputes.
