@@ -13,6 +13,8 @@ import { loadConfig } from '../src/config.js';
 import { connectPglite, type Database } from '../src/db/client.js';
 import { bookings, customers, providers, vehicles } from '../src/db/schema/index.js';
 import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
+import { AppError } from '../src/lib/errors.js';
+import type { PaymentGateway, WebhookEvent } from '../src/lib/stripe.js';
 
 export const WEB_ORIGIN = 'http://localhost:3000';
 export const SESSION_COOKIE = 'sxm_session';
@@ -24,23 +26,30 @@ export type TestContext = {
   email: MemoryEmailSender;
   // Passwords added here are treated as "found in a data breach".
   breachedPasswords: Set<string>;
+  // The stand-in Stripe. Tests read what it was asked to do, and send the
+  // messages Stripe would send back.
+  gateway: FakeGateway;
   close: () => Promise<void>;
 };
 
 // ---- A PRIVATE COPY OF THE API ----
-export async function createTestContext(options: { extend?: (app: FastifyInstance) => void } = {}): Promise<TestContext> {
+export async function createTestContext(
+  options: { extend?: (app: FastifyInstance) => void } = {},
+): Promise<TestContext> {
   const connection = await connectPglite();
   await connection.migrate();
 
   const config = loadConfig({ NODE_ENV: 'test', CORS_ORIGINS: WEB_ORIGIN, APP_URL: WEB_ORIGIN });
   const email = createMemoryEmailSender();
   const breachedPasswords = new Set<string>();
+  const gateway = createFakeGateway();
 
   const app = await buildApp({
     config,
     db: connection.db,
     email,
     breachedPasswords: { isBreached: async (password) => breachedPasswords.has(password) },
+    payments: gateway,
     extend: options.extend,
   });
   await app.ready();
@@ -50,11 +59,103 @@ export async function createTestContext(options: { extend?: (app: FastifyInstanc
     db: connection.db,
     email,
     breachedPasswords,
+    gateway,
     close: async () => {
       await app.close();
       await connection.close();
     },
   };
+}
+
+// ---- A STAND-IN FOR STRIPE ----
+// Behaves the way Stripe does in the ways that matter: it hands back a payment
+// with a one-time secret, it refuses a message that is not properly signed, and
+// it remembers what it was asked to do so a test can check. No network, no keys.
+export const TEST_SIGNATURE = 'test-signature';
+
+export type FakeGateway = PaymentGateway & {
+  // Every payment it has been asked to create, by id.
+  created: Map<string, { kind: 'rental' | 'deposit'; amountCents: number; metadata: Record<string, string> }>;
+  captured: { paymentId: string; amountCents: number }[];
+  cancelled: string[];
+  refunded: { paymentId: string; amountCents?: number }[];
+  // Builds the message Stripe would send about a payment.
+  eventFor(type: string, paymentId: string, overrides?: Record<string, unknown>): WebhookEvent;
+};
+
+export function createFakeGateway(): FakeGateway {
+  const created: FakeGateway['created'] = new Map();
+  const statuses = new Map<string, string>();
+  let counter = 0;
+
+  const create = (kind: 'rental' | 'deposit', amountCents: number, metadata: Record<string, string>) => {
+    counter += 1;
+    const id = `pi_${kind}_${counter}`;
+    created.set(id, { kind, amountCents, metadata: { ...metadata, kind } });
+    statuses.set(id, 'requires_payment_method');
+    return { id, clientSecret: `${id}_secret`, status: 'requires_payment_method' };
+  };
+
+  const gateway: FakeGateway = {
+    created,
+    captured: [],
+    cancelled: [],
+    refunded: [],
+
+    async createRentalPayment(input) {
+      return create('rental', input.amountCents, { bookingId: input.bookingId, reference: input.bookingReference });
+    },
+    async createDepositHold(input) {
+      return create('deposit', input.amountCents, {
+        bookingId: input.bookingId,
+        depositId: input.depositId,
+        reference: input.bookingReference,
+      });
+    },
+    async getPayment(paymentId) {
+      const payment = created.get(paymentId);
+      if (!payment) return null;
+      return { id: paymentId, clientSecret: `${paymentId}_secret`, status: statuses.get(paymentId) ?? 'unknown' };
+    },
+    async captureDepositHold(paymentId, amountCents) {
+      gateway.captured.push({ paymentId, amountCents });
+      statuses.set(paymentId, 'succeeded');
+    },
+    async cancelDepositHold(paymentId) {
+      gateway.cancelled.push(paymentId);
+      statuses.set(paymentId, 'canceled');
+    },
+    async refundPayment(paymentId, amountCents) {
+      gateway.refunded.push({ paymentId, amountCents });
+    },
+    verifyWebhook(rawBody, signature) {
+      // The real Stripe checks a signature over these exact bytes; this checks
+      // a fixed one, so a test can prove an unsigned message is refused.
+      if (signature !== TEST_SIGNATURE) {
+        throw new AppError(400, 'invalid_signature', 'This message could not be verified.');
+      }
+      return JSON.parse(rawBody.toString('utf8')) as WebhookEvent;
+    },
+
+    eventFor(type, paymentId, overrides = {}) {
+      const payment = created.get(paymentId);
+      counter += 1;
+      return {
+        id: `evt_${counter}`,
+        type,
+        data: {
+          object: {
+            id: paymentId,
+            amount: payment?.amountCents ?? 0,
+            metadata: payment?.metadata ?? {},
+            ...overrides,
+          },
+        },
+      };
+    },
+  };
+
+  return gateway;
 }
 
 // ---- A DIFFERENT VISITOR ADDRESS PER CALL ----

@@ -29,9 +29,14 @@ import { registerSecurityHeaders } from './plugins/security-headers.js';
 import authRoutes from './routes/auth/index.js';
 import bookingRoutes from './routes/bookings/index.js';
 import customerRoutes from './routes/customers/index.js';
+import depositRoutes from './routes/deposits/index.js';
+import paymentRoutes from './routes/payments/index.js';
 import providerRoutes from './routes/providers/index.js';
 import vehicleRoutes from './routes/vehicles/index.js';
+import webhookRoutes from './routes/webhooks/index.js';
 import { createAuthService } from './services/auth/index.js';
+import { createPaymentService } from './services/payments/index.js';
+import { createStripeGateway, createUnconfiguredGateway, type PaymentGateway } from './lib/stripe.js';
 
 export type AppDependencies = {
   config: Config;
@@ -39,6 +44,7 @@ export type AppDependencies = {
   // Optional stand-ins, mainly for tests. Sensible defaults are chosen otherwise.
   email?: EmailSender;
   breachedPasswords?: BreachedPasswordChecker;
+  payments?: PaymentGateway;
   // A chance to add extra routes before the app is sealed (used by tests).
   extend?: (app: FastifyInstance) => void | Promise<void>;
 };
@@ -77,6 +83,19 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     deps.breachedPasswords ?? (config.breachedPasswordCheck ? createHibpChecker(app.log) : skipBreachedPasswordCheck);
   const auth = createAuthService({ db, config, email, breachedPasswords, logger: app.log });
 
+  // Stripe, when its keys are set. Until then every payment endpoint answers
+  // "not switched on yet" rather than appearing to take money.
+  const gateway =
+    deps.payments ??
+    (config.stripeSecretKey
+      ? createStripeGateway({
+          secretKey: config.stripeSecretKey,
+          webhookSecret: config.stripeWebhookSecret,
+          currency: config.currency,
+        })
+      : createUnconfiguredGateway());
+  const payments = createPaymentService({ db, gateway, logger: app.log });
+
   // ---- ROUTES ----
   // Versioned, so a breaking change never strands an older phone-app release.
   await app.register(
@@ -91,7 +110,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
       await api.register(providerRoutes, { prefix: '/providers', db });
       await api.register(bookingRoutes, { prefix: '/bookings', db });
-      // Later phases register payments, deposits, verification, ... here.
+      await api.register(paymentRoutes, { prefix: '/payments', payments });
+      await api.register(depositRoutes, { prefix: '/deposits', payments });
+      await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway });
+      // Later phases register verification, provider tools, admin, ... here.
     },
     { prefix: '/api/v1' },
   );

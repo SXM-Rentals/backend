@@ -108,12 +108,14 @@ describe('searching for a car', () => {
       // Prices come back in dollars, not cents.
       dailyRate: 65,
       weeklyRate: 390,
-      deliveryFee: 25,
       depositAmount: 500,
       vehicleClass: 'fourByFour',
       seats: 4,
       unavailableDates: [],
     });
+    // Delivery is free, so no fee is ever reported to a screen.
+    expect(jimny.deliveryFee).toBeUndefined();
+    expect(jimny.deliveryAvailable).toBe(true);
     // Photos come in the order the business set.
     expect(jimny.photos).toEqual(['jimny-side.jpg', 'jimny-front.jpg']);
     expect(jimny.accidentHistory).toEqual([

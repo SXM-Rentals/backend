@@ -20,6 +20,11 @@ const envSchema = z
     CORS_ORIGINS: z.string().default(''),
     APP_URL: z.string().min(1).default('http://localhost:3000'),
     BREACHED_PASSWORD_CHECK: z.enum(['true', 'false']).default('true'),
+    // Stripe. Until these are set, the payment and deposit endpoints answer
+    // "not switched on yet" rather than pretending to take money.
+    STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+    CURRENCY: z.string().length(3).default('usd'),
     // How many proxies (Render, Cloudflare) sit in front of the server. Needed
     // to see each visitor's real address for rate limiting. 0 = none.
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
@@ -52,6 +57,9 @@ export type Config = {
   corsOrigins: string[];
   appUrl: string;
   breachedPasswordCheck: boolean;
+  stripeSecretKey: string | undefined;
+  stripeWebhookSecret: string | undefined;
+  currency: string;
   trustProxyHops: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 };
@@ -90,6 +98,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins: splitList(env.CORS_ORIGINS),
     appUrl: env.APP_URL.replace(/\/+$/, ''),
     breachedPasswordCheck: env.BREACHED_PASSWORD_CHECK === 'true',
+    stripeSecretKey: env.STRIPE_SECRET_KEY,
+    stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    currency: env.CURRENCY.toLowerCase(),
     trustProxyHops: env.TRUST_PROXY_HOPS,
     logLevel: env.LOG_LEVEL,
   };

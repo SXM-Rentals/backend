@@ -51,8 +51,10 @@ export function toVehicle(
     depositIsVehicleSpecific: vehicle.depositIsVehicleSpecific,
     pickupTown: vehicle.pickupTown,
     side: vehicle.side,
+    // Whether the business will bring the car to the customer. Delivery is
+    // free, so no fee is reported — a screen cannot show a charge that is
+    // never made.
     deliveryAvailable: vehicle.deliveryAvailable,
-    ...(vehicle.deliveryFeeCents ? { deliveryFee: toAmount(vehicle.deliveryFeeCents) } : {}),
     latitude: vehicle.latitude,
     longitude: vehicle.longitude,
     rating: vehicle.rating,

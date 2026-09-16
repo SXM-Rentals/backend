@@ -8,8 +8,8 @@
 // WHAT A RENTAL COSTS:
 //   - the rental itself: whole weeks at the weekly price where the business
 //     offers one, then the remaining days at the daily price;
-//   - delivery, when the car is being brought to the customer;
 //   - the SXM Rentals service fee, 5% of the rental.
+// Delivery is free: a car can be brought to the customer at no charge.
 // Those lines added together are what the customer pays. SXM Rentals keeps 30%
 // of it (the rate is a platform setting) and the rest is the business's.
 //
@@ -105,15 +105,9 @@ export function quoteBooking(
     });
   }
 
-  // The service fee is worked out on the rental itself, before delivery is
-  // added: delivery is the business's own cost being passed on, and charging a
-  // platform fee on top of it would quietly inflate it.
+  // DELIVERY IS FREE. A business can still bring the car to the customer, and
+  // nothing is charged for it. There is deliberately no delivery price line.
   const rentalCents = lines.reduce((sum, line) => sum + line.amountCents, 0);
-
-  // Delivery, when the car is being brought to the customer.
-  if (input.collection === 'delivery' && vehicle.deliveryFeeCents) {
-    lines.push({ label: 'Delivery', amountCents: vehicle.deliveryFeeCents });
-  }
 
   lines.push({ label: 'Service fee', amountCents: Math.round(rentalCents * SERVICE_FEE_RATE) });
 

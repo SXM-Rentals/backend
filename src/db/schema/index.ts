@@ -11,7 +11,7 @@
 //                  disputes, promo codes, reviews
 //   engagement.ts  conversations, notifications, rewards, AI support drafts
 //   admin.ts       staff accounts, audit log, platform settings
-//   security.ts    rate-limit counters
+//   security.ts    rate-limit counters, handled Stripe messages
 
 export * from './enums.js';
 export * from './identity.js';

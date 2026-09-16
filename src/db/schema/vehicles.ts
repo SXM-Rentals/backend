@@ -74,6 +74,8 @@ export const vehicles = pgTable(
     pickupTown: text('pickup_town').notNull(),
     side: islandSide('side').notNull(),
     deliveryAvailable: boolean('delivery_available').notNull().default(false),
+    // UNUSED: delivery is free, so nothing reads or charges this. Kept so the
+    // decision can be reversed without rebuilding the table.
     deliveryFeeCents: integer('delivery_fee_cents'),
     latitude: doublePrecision('latitude').notNull(),
     longitude: doublePrecision('longitude').notNull(),

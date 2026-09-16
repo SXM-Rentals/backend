@@ -72,7 +72,7 @@ describe('what a rental costs', () => {
     expect(quote.available).toBe(true);
   });
 
-  it('charges whole weeks at the weekly price, and adds delivery when asked', async () => {
+  it('charges whole weeks at the weekly price, and never charges for delivery', async () => {
     const res = await post('/bookings/quote', {
       vehicleId,
       startDate: dateIn(40),
@@ -80,16 +80,16 @@ describe('what a rental costs', () => {
       collection: 'delivery',
     });
     const quote = res.json();
-    // 9 days = one week at $390 plus 2 days at $65, then delivery, then the fee.
+    // 9 days = one week at $390 plus 2 days at $65, then the fee. Delivery was
+    // asked for and adds nothing: there is no delivery line at all.
     expect(quote.lines.map((l: { label: string }) => l.label)).toEqual([
       'Rental (1 week x $390)',
       'Rental (2 days x $65)',
-      'Delivery',
       'Service fee',
     ]);
-    // $520 rental + $25 delivery + $26 fee (5% of the rental, not of delivery).
+    // $520 rental + $26 fee (5% of the rental). Nothing for delivery.
     expect(quote.lines.find((l: { label: string }) => l.label === 'Service fee').amount).toBe(26);
-    expect(quote.totalDueToday).toBe(571);
+    expect(quote.totalDueToday).toBe(546);
   });
 });
 

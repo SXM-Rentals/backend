@@ -9,15 +9,21 @@
 The API behind the SXM Rentals website, admin panel and phone app. Fastify on
 Node, Postgres on Neon, TypeScript throughout.
 
-**Phases 1 and 2 are built.** Phase 1 is the foundation: the server, the
-complete database layout, accounts and sign-in, and the security protections
-every later feature sits behind. Phase 2 is the heart of the product: browsing
-and searching cars, working out what a rental costs, and making a booking.
+**Phases 1 to 3 are built.** Phase 1 is the foundation: the server, the complete
+database layout, accounts and sign-in, and the security protections every later
+feature sits behind. Phase 2 is the heart of the product: browsing and searching
+cars, working out what a rental costs, and making a booking. Phase 3 is the
+money: charging for a rental, holding a security deposit, and dealing with what
+Stripe tells us afterwards.
 
-Payments, identity checks, the business dashboard, admin tools, rewards,
-notifications and the support agent arrive in later phases; their folders exist
-as clearly marked placeholders. **No money moves yet** — a booking is recorded
-with its price worked out and its deposit listed as "not taken".
+Identity checks, the business dashboard, admin tools, rewards, notifications and
+the support agent arrive in later phases; their folders exist as clearly marked
+placeholders.
+
+**Stripe is not connected yet.** Until `STRIPE_SECRET_KEY` is set, the payment
+and deposit endpoints answer "not switched on yet" rather than appearing to take
+money. Everything about them is already tested, against a stand-in Stripe that
+needs no account and no keys.
 
 ---
 
@@ -68,6 +74,9 @@ readable list, if any are wrong — and production is stricter: it requires
 | `APP_URL` | The customer website, for links inside emails |
 | `TRUST_PROXY_HOPS` | Proxies in front of the server (Render = 1), to see real visitor addresses |
 | `BREACHED_PASSWORD_CHECK` | `false` skips the leaked-password check (e.g. offline) |
+| `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
+| `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
+| `CURRENCY` | What bookings are charged in (`usd`) |
 
 Never put a real secret in `.env.example` or anywhere else git can see.
 
@@ -93,13 +102,15 @@ src/
     auth/              accounts, sign-in, sessions
     availability-engine/  is this car free, and which days are taken
     booking-engine/    what a rental costs, and making the booking
+    payments/          charges, deposit holds, and what Stripe tells us after
     serializers/       database rows → the exact shapes the apps expect
-  lib/                 small shared tools: passwords, codes, errors, email
+  lib/                 small shared tools: passwords, codes, errors, email, Stripe
   types/api.ts         the response shapes, copied from sxm-rentals-web
 test/
   auth.test.ts         every account journey, from the outside
   vehicles.test.ts     searching, filtering, availability, reviews
   bookings.test.ts     prices, making and cancelling bookings, double-booking
+  payments.test.ts     charges, deposit holds, claims, Stripe's messages
   security.test.ts     headers, CORS, forged requests, rate limits, errors
   rules/               the three product rules
 ```
@@ -138,6 +149,12 @@ Everything lives under `/api/v1`.
 | GET | `/bookings` | Your own bookings |
 | GET | `/bookings/:id` | One of your own bookings |
 | POST | `/bookings/:id/cancel` | Cancel one that has not started |
+| POST | `/payments/bookings/:id/intent` | Start (or resume) paying for a booking |
+| POST | `/deposits/bookings/:id/authorize` | Place the deposit hold on the card |
+| GET | `/deposits/bookings/:id` | What is being held, and its state |
+| POST | `/deposits/:id/release` | Give a deposit back — **staff only** |
+| POST | `/deposits/:id/claim` | Keep part of one — **staff only** |
+| POST | `/webhooks/stripe` | What Stripe tells us happened |
 
 Browsing is public: somebody searching for a car has not signed in yet, and a
 search result needs to be able to appear in Google. Only cars staff have
@@ -145,17 +162,50 @@ approved are ever returned, and lists are capped and paged. Everything to do
 with a booking needs you to be signed in.
 
 **What a rental costs.** Whole weeks at the business's weekly price where they
-offer one, then the remaining days at the daily price, plus delivery if the car
-is being brought to the customer, plus a 5% SXM Rentals service fee — worked out
-on the rental alone, never on the delivery charge. SXM Rentals keeps 30% of the
-total (a platform setting), and the rest is the business's, to the cent. **The
-deposit is never part of any of that**; it comes back beside the total.
+offer one, then the remaining days at the daily price, plus a 5% SXM Rentals
+service fee. **Delivery is free** — a business can bring the car to the customer
+at no charge, so there is no delivery line and no delivery fee is reported to
+any screen. SXM Rentals keeps 30% of the total (a platform setting), and the
+rest is the business's, to the cent. **The deposit is never part of any of
+that**; it comes back beside the total.
 
 **The same car cannot be booked twice.** A booking locks the car's record while
 it checks, so two people booking the same days at the same instant cannot both
 succeed — the second gets a clear "just been booked". A rental from the 1st to
 the 4th uses the nights of the 1st, 2nd and 3rd, so the 4th is free for the next
 person to collect.
+
+---
+
+## How the money works
+
+**Card details never touch this server.** A payment endpoint hands the app a
+one-time "client secret"; the app gives that to Stripe's own card form, and the
+card number goes straight from the customer's device to Stripe. That is what
+keeps SXM Rentals out of the strictest card-handling rules.
+
+**The rental is charged. The deposit is only held.** They are two separate
+payments at Stripe, on purpose:
+
+| | The rental | The security deposit |
+|---|---|---|
+| What happens | Taken from the card | Set aside on the card, never taken |
+| Whose money | Split between the business and SXM Rentals | The customer's, throughout |
+| Where it lives | On the booking, in the ledger | Its own `deposits` row, its own life cycle |
+| Ending | Paid, or refunded | Released in full, or part kept after a written claim |
+
+Keeping any part of a deposit needs a written reason, is never more than was
+held, and is a staff decision — never a customer's or a business's. The database
+refuses a claim without a reason, and the release and claim endpoints sit behind
+the staff check, which refuses everyone until staff sign-in is built.
+
+**A booking is only ever marked paid because Stripe said so.** A card can be
+declined, or need the bank's approval, after the customer has closed the page,
+so nothing is believed because an app said it worked. Stripe's message is signed
+and the signature is checked against our own secret; an unsigned or altered one
+is refused outright, which is what stops a stranger simply announcing that a
+booking has been paid for. Stripe resends a message when it is unsure we got it,
+so every message is recorded and a repeat changes nothing.
 
 **The website and the phone app sign in differently.** The website gets an
 httpOnly cookie that page scripts cannot read. The phone app sends
@@ -221,18 +271,22 @@ Mapped to the Phase 1 list in the Security Hardening Spec.
 | CORS | Done: our own websites only, never a wildcard |
 | Forged cross-site requests | Done: cookie-signed changes must come from one of our websites |
 | Input validation | Done for every current route (Zod) |
+| Card data | Never touches this server: the apps send it straight to Stripe with a one-time secret |
+| Signed webhooks | Done: Stripe's messages are verified against our signing secret over the exact bytes sent, and a repeat is recorded and ignored |
 | AI budget caps | Not yet: there are no AI calls yet (Phase 8) |
 
-**Deliberately not in Phase 1:**
+**Deliberately not built yet:**
 
 - **Staff sign-in.** The admin panel's separate sign-in, with mandatory two-factor
   codes, is Phase 2. Until then `requireAdmin` refuses everyone, so an admin
   route added early cannot be reached.
 - **Sign in with Apple and Google.** Needs developer-account keys.
 - **A real email provider** (see above).
-- **Everything past bookings** — Stripe payments and the deposit hold, identity
-  checks, the business dashboard, admin tools, rewards, notifications and the
-  support agent.
+- **Paying businesses (Stripe Connect).** Each booking already records what the
+  business is owed and what SXM Rentals keeps; onboarding businesses to Stripe
+  and sending the money arrives with the business dashboard in Phase 5.
+- **Everything past payments** — identity checks, the business dashboard, admin
+  tools, rewards, notifications and the support agent.
 
 **Known dependency advisory:** `npm audit` reports 4 moderate advisories, all
 inside `drizzle-kit` (the migration generator). It bundles an old esbuild with a

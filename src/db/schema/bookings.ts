@@ -99,6 +99,9 @@ export const bookings = pgTable(
     payoutCents: integer('payout_cents').notNull(),
     totalDueTodayCents: integer('total_due_today_cents').notNull(),
     paymentStatus: paymentStatus('payment_status').notNull().default('authorized'),
+    // Stripe's own reference for the rental payment. The deposit has its own,
+    // separate one on the deposits table — the two are never the same charge.
+    stripePaymentIntentId: text('stripe_payment_intent_id'),
 
     promoCodeId: uuid('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
     agreementSignedAt: moment('agreement_signed_at'),
@@ -108,6 +111,7 @@ export const bookings = pgTable(
   },
   (t) => [
     uniqueIndex('bookings_reference_unique').on(t.reference),
+    uniqueIndex('bookings_payment_intent_unique').on(t.stripePaymentIntentId),
     index('bookings_customer_idx').on(t.customerId),
     index('bookings_provider_idx').on(t.providerId),
     index('bookings_vehicle_dates_idx').on(t.vehicleId, t.startDate, t.endDate),
@@ -181,12 +185,20 @@ export const deposits = pgTable(
     releasedAt: moment('released_at'),
     claimedAt: moment('claimed_at'),
     claimReason: text('claim_reason'),
+    // How much of the deposit was actually kept. A claim can be for part of it;
+    // whatever is not claimed goes back to the customer.
+    claimedAmountCents: integer('claimed_amount_cents'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex('deposits_booking_unique').on(t.bookingId),
+    uniqueIndex('deposits_payment_intent_unique').on(t.stripePaymentIntentId),
     check('deposits_amount_positive', sql`${t.amountCents} > 0`),
+    check(
+      'deposits_claim_within_amount',
+      sql`${t.claimedAmountCents} is null or (${t.claimedAmountCents} > 0 and ${t.claimedAmountCents} <= ${t.amountCents})`,
+    ),
     check('deposits_claim_needs_reason', sql`${t.status} <> 'claimed' or length(trim(coalesce(${t.claimReason}, ''))) > 0`),
   ],
 );
