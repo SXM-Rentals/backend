@@ -123,8 +123,8 @@ src/
   lib/                 small shared tools: passwords, codes, errors, email, Stripe
   scripts/             commands run by hand, e.g. making a staff account
   types/api.ts         the response shapes, copied from sxm-rentals-web
-render.yaml            how the API and the daily job run on Render
-.github/workflows/     the checks GitHub runs on every push
+render.yaml            how the API runs on Render
+.github/workflows/     the checks GitHub runs on every push, and the daily job
 test/
   auth.test.ts         every account journey, from the outside
   vehicles.test.ts     searching, filtering, availability, reviews
@@ -495,17 +495,28 @@ when you are ready to take real money. The webhook signing secret comes from
 Stripe's webhook settings, where you point it at
 `https://your-api/api/v1/webhooks/stripe`.
 
-**3. The service (Render).** `render.yaml` describes both the API and the daily
-job, so Render can read the setup from the repository instead of it being
-clicked together in a dashboard. Set the values marked `sync: false` in the
+**3. The service (Render).** `render.yaml` describes the API, so Render can read
+the setup from the repository instead of it being clicked together in a
+dashboard. **It is on Render's free plan for now**, while there are no real
+customers: it sleeps after about 15 minutes idle, and the first request after
+that takes up to a minute. At launch, change `plan: free` to `plan: starter`. Set the values marked `sync: false` in the
 dashboard — they are deliberately not in the file. That includes `APP_URL` and
 `CORS_ORIGINS`: until there is a domain, use the free `…vercel.app` addresses of
 the website and admin panel, and change them in the dashboard when a domain
 exists.
 
-**4. Migrations run before the new version goes live**, as their own step
-(`preDeployCommand`). If one fails the deploy stops and the old version keeps
-serving.
+**4. Migrations run before the new version starts serving.** The free plan has
+no separate pre-deploy step, so they run at the start of the start command: if
+one fails the server never starts, the new version never goes live, and Render
+keeps serving the last one that worked. On the paid plan, move them into a
+`preDeployCommand` instead.
+
+**The daily job runs on GitHub**, because the free plan has no scheduled jobs
+(`.github/workflows/daily-tasks.yml`, 06:00 UTC). It needs two repository
+secrets — **Settings → Secrets and variables → Actions** — named
+`PRODUCTION_DATABASE_URL` and `PRODUCTION_ENCRYPTION_KEY`, the same values the
+API has on Render. The **Run workflow** button on the Actions page runs it on
+demand. GitHub pauses schedules in a repository with no activity for 60 days.
 
 **5. The first staff account**, once the API is up:
 
@@ -527,7 +538,8 @@ the only file that needs to change.
 - [ ] An email provider connected in `src/lib/email.ts` — until then production
       refuses to send and logs it, so password resets will not arrive
 - [ ] The daily job running (bookings move on, reminders go out, payouts are
-      prepared)
+      prepared) — check its runs on GitHub's Actions page
+- [ ] The API moved to Render's paid plan, so it no longer sleeps
 - [ ] A Neon backup schedule you have actually restored from once
 - [ ] Identity checks decided — they are manual today
 - [ ] `npm audit` clean for what ships (CI checks this on every push)

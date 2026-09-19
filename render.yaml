@@ -1,39 +1,41 @@
 # SXM Rentals — Created by Giordano Bertin-Maurice
 # Copyright (c) 2026 Giordano Bertin-Maurice. All rights reserved.
-# WHAT THIS FILE DOES: Describes how this backend runs on Render, so the setup
-# lives in the repository and is reviewed like code rather than being clicked
+# WHAT THIS FILE DOES: Describes how the API runs on Render, so the setup lives
+# in the repository and is reviewed like code rather than being clicked
 # together in a dashboard and forgotten.
 #
-# It describes two things:
-#   1. the API itself, and
-#   2. a small job that runs once a day (bookings move on as dates pass,
-#      tomorrow's reminders go out, and each business's payout is prepared).
+# IT IS ON RENDER'S FREE PLAN FOR NOW, while there are no real customers. That
+# has three consequences worth knowing:
 #
-# TWO DELIBERATE CHOICES:
+#   1. The API goes to sleep after about 15 minutes with no requests, and the
+#      first request after that takes up to a minute while it wakes.
+#   2. The free plan has no separate "before going live" step, so the
+#      migrations run at the start of the start command instead. If one fails,
+#      the server never starts, the new version never goes live, and Render
+#      keeps serving the last one that worked — the same safety as before.
+#      Running them on every start is harmless: when the database is already
+#      up to date it is a single quick check.
+#   3. The free plan has no scheduled jobs, so the daily job runs on GitHub
+#      instead (.github/workflows/daily-tasks.yml).
 #
-# MIGRATIONS RUN BEFORE THE NEW VERSION GOES LIVE, as their own step, never
-# silently when the server boots. If a migration fails the deploy stops and the
-# old version keeps serving, which is the safe way round.
+# AT LAUNCH, move to the paid plan: change "plan: free" to "plan: starter",
+# move the migration into a preDeployCommand, and the API stops sleeping.
 #
 # NO SECRET IS IN THIS FILE. Everything sensitive is marked "sync: false",
-# which means Render asks for the value once and keeps it. This file is in git;
-# the keys never are.
+# which means Render asks for the value once and keeps it.
 
 services:
   - type: web
     name: sxm-rentals-api
     runtime: node
-    plan: starter
+    plan: free
     region: ohio
     branch: main
     # --include=dev: NODE_ENV=production below is also set during the build,
     # and without this npm would skip the TypeScript compiler the build needs.
     buildCommand: npm ci --include=dev && npm run build
-    # The database is brought up to date first; the server only starts if that
-    # succeeded.
-    # The compiled migration command, so nothing at runtime needs dev tools.
-    preDeployCommand: node dist/db/migrate.js
-    startCommand: npm start
+    # Bring the database up to date, and only start serving if that worked.
+    startCommand: node dist/db/migrate.js && npm start
     # Render restarts the service if this stops answering. It checks the
     # database too, so a server that cannot reach Neon is treated as unhealthy.
     healthCheckPath: /api/v1/health
@@ -47,6 +49,8 @@ services:
         # Render puts one proxy in front of the service. This is what lets the
         # rate limiter see each visitor's real address.
         value: 1
+      - key: LOG_LEVEL
+        value: info
       # ---- ADDRESSES: set in the Render dashboard ----
       # There is no domain yet, so these are the free addresses Vercel gives
       # the website and admin panel (…vercel.app). Set them there, and change
@@ -60,8 +64,6 @@ services:
       # (the phone app is unaffected — it is not a browser).
       - key: CORS_ORIGINS
         sync: false
-      - key: LOG_LEVEL
-        value: info
       # ---- SECRETS: set in the Render dashboard, never in this file ----
       - key: DATABASE_URL
         sync: false
@@ -73,25 +75,4 @@ services:
         sync: false
       # Addresses allowed to reach the admin panel. Leave unset for none.
       - key: ADMIN_IP_ALLOWLIST
-        sync: false
-
-  - type: cron
-    name: sxm-rentals-daily
-    runtime: node
-    plan: starter
-    region: ohio
-    branch: main
-    # 06:00 UTC is early morning on the island, so a reminder about tomorrow
-    # arrives at a sensible hour rather than in the middle of the night.
-    schedule: '0 6 * * *'
-    buildCommand: npm ci --include=dev && npm run build
-    startCommand: node dist/scripts/daily-tasks.js
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: APP_URL
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: ENCRYPTION_KEY
         sync: false
