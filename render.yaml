@@ -26,10 +26,13 @@ services:
     plan: starter
     region: ohio
     branch: main
-    buildCommand: npm ci && npm run build
+    # --include=dev: NODE_ENV=production below is also set during the build,
+    # and without this npm would skip the TypeScript compiler the build needs.
+    buildCommand: npm ci --include=dev && npm run build
     # The database is brought up to date first; the server only starts if that
     # succeeded.
-    preDeployCommand: npm run db:migrate
+    # The compiled migration command, so nothing at runtime needs dev tools.
+    preDeployCommand: node dist/db/migrate.js
     startCommand: npm start
     # Render restarts the service if this stops answering. It checks the
     # database too, so a server that cannot reach Neon is treated as unhealthy.
@@ -81,8 +84,8 @@ services:
     # 06:00 UTC is early morning on the island, so a reminder about tomorrow
     # arrives at a sensible hour rather than in the middle of the night.
     schedule: '0 6 * * *'
-    buildCommand: npm ci
-    startCommand: npm run tasks:daily
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: node dist/scripts/daily-tasks.js
     envVars:
       - key: NODE_ENV
         value: production
