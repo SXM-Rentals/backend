@@ -498,8 +498,10 @@ Stripe's webhook settings, where you point it at
 **3. The service (Render).** `render.yaml` describes both the API and the daily
 job, so Render can read the setup from the repository instead of it being
 clicked together in a dashboard. Set the values marked `sync: false` in the
-dashboard — they are deliberately not in the file. Change `APP_URL` and
-`CORS_ORIGINS` to your real domains before the first deploy.
+dashboard — they are deliberately not in the file. That includes `APP_URL` and
+`CORS_ORIGINS`: until there is a domain, use the free `…vercel.app` addresses of
+the website and admin panel, and change them in the dashboard when a domain
+exists.
 
 **4. Migrations run before the new version goes live**, as their own step
 (`preDeployCommand`). If one fails the deploy stops and the old version keeps

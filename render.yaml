@@ -44,13 +44,19 @@ services:
         # Render puts one proxy in front of the service. This is what lets the
         # rate limiter see each visitor's real address.
         value: 1
+      # ---- ADDRESSES: set in the Render dashboard ----
+      # There is no domain yet, so these are the free addresses Vercel gives
+      # the website and admin panel (…vercel.app). Set them there, and change
+      # them once a real domain exists — no code change needed either time.
+      #
+      # APP_URL: the customer website, used for links inside emails.
       - key: APP_URL
-        # The customer website, used for links inside emails.
-        value: https://sxmrentals.com
+        sync: false
+      # CORS_ORIGINS: the only sites allowed to call this API from a browser,
+      # comma separated, all https. Left empty, no browser site can call it
+      # (the phone app is unaffected — it is not a browser).
       - key: CORS_ORIGINS
-        # Only our own sites may call this API from a browser. Add the admin
-        # panel's address here as well once it has one.
-        value: https://sxmrentals.com,https://www.sxmrentals.com
+        sync: false
       - key: LOG_LEVEL
         value: info
       # ---- SECRETS: set in the Render dashboard, never in this file ----
@@ -81,7 +87,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: APP_URL
-        value: https://sxmrentals.com
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: ENCRYPTION_KEY
