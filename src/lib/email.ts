@@ -82,7 +82,7 @@ export type ResendLike = {
 
 export type ResendOptions = {
   apiKey: string;
-  // Who the email appears to come from, e.g. "SXM Rentals <bookings@sxmrentals.com>".
+  // Who the email appears to come from, e.g. "SXM Rentals <bookings@sxmrentals.app>".
   from: string;
   // Where a reply goes, when that should differ from the sender.
   replyTo?: string | undefined;

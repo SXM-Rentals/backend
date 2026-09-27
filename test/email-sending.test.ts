@@ -45,8 +45,8 @@ describe('sending email through Resend', () => {
     const logger = fakeLogger();
     const sender = createResendEmailSender({
       apiKey: 'test-key',
-      from: 'SXM Rentals <bookings@sxmrentals.com>',
-      replyTo: 'help@sxmrentals.com',
+      from: 'SXM Rentals <bookings@sxmrentals.app>',
+      replyTo: 'help@sxmrentals.app',
       logger,
       client,
     });
@@ -60,10 +60,10 @@ describe('sending email through Resend', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      from: 'SXM Rentals <bookings@sxmrentals.com>',
+      from: 'SXM Rentals <bookings@sxmrentals.app>',
       to: 'customer@example.com',
       subject: 'Confirm your email address',
-      replyTo: 'help@sxmrentals.com',
+      replyTo: 'help@sxmrentals.app',
     });
     // Both versions travel together: mail programs that cannot show the
     // designed one still get a readable email.
@@ -93,11 +93,11 @@ describe('sending email through Resend', () => {
   // The one that would otherwise bite: Resend answers with an error rather than
   // throwing, so an unchecked call looks exactly like a successful send.
   it('raises the problem when Resend refuses to deliver', async () => {
-    const { client } = fakeResend('The sxmrentals.com domain is not verified.');
+    const { client } = fakeResend('The sxmrentals.app domain is not verified.');
     const logger = fakeLogger();
     const sender = createResendEmailSender({
       apiKey: 'test-key',
-      from: 'SXM Rentals <bookings@sxmrentals.com>',
+      from: 'SXM Rentals <bookings@sxmrentals.app>',
       logger,
       client,
     });

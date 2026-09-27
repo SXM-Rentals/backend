@@ -548,10 +548,22 @@ the setup from the repository instead of it being clicked together in a
 dashboard. **It is on Render's free plan for now**, while there are no real
 customers: it sleeps after about 15 minutes idle, and the first request after
 that takes up to a minute. At launch, change `plan: free` to `plan: starter`. Set the values marked `sync: false` in the
-dashboard — they are deliberately not in the file. That includes `APP_URL` and
-`CORS_ORIGINS`: until there is a domain, use the free `…vercel.app` addresses of
-the website and admin panel, and change them in the dashboard when a domain
-exists.
+dashboard — they are deliberately not in the file.
+
+**The API belongs on `api.sxmrentals.app`**, added under the service's
+**Settings → Custom Domains** with a `CNAME` record at the registrar pointing
+`api` at the `…onrender.com` address. This is not decoration. The session
+cookie carries the `__Host-` prefix and `SameSite=Lax`, so a browser refuses
+to send it from the website to an API on a *different* domain: signing in on
+the website cannot work while the API answers on `onrender.com`. Put both under
+`sxmrentals.app` and they count as the same site, the cookie travels, and the
+proxy tricks usually used to paper over this are unnecessary. The phone app is
+unaffected either way — it sends a bearer token, not a cookie.
+
+`APP_URL` is `https://www.sxmrentals.app` (no trailing slash — the bare domain
+redirects to `www`, so `www` is the canonical host). `CORS_ORIGINS` is that
+address plus the admin panel's. Both are dashboard values; neither needs a code
+change when the addresses change again.
 
 **4. Migrations run before the new version starts serving.** The free plan has
 no separate pre-deploy step, so they run at the start of the start command: if

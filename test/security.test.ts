@@ -173,19 +173,19 @@ describe('settings checks', () => {
   it('refuses to start production without a database, a key, or with non-HTTPS origins', () => {
     const key = Buffer.alloc(32, 7).toString('base64');
 
-    expect(() => loadConfig({ NODE_ENV: 'production', CORS_ORIGINS: 'https://sxmrentals.com' })).toThrow(/DATABASE_URL/);
+    expect(() => loadConfig({ NODE_ENV: 'production', CORS_ORIGINS: 'https://sxmrentals.app' })).toThrow(/DATABASE_URL/);
     expect(() =>
       loadConfig({
         NODE_ENV: 'production',
         DATABASE_URL: 'postgres://x',
         ENCRYPTION_KEY: key,
-        CORS_ORIGINS: 'http://sxmrentals.com',
+        CORS_ORIGINS: 'http://sxmrentals.app',
       }),
     ).toThrow(/https/);
     // Staff two-factor secrets are encrypted with this, so production will not
     // start without it rather than storing one in plain text.
     expect(() =>
-      loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'postgres://x', CORS_ORIGINS: 'https://sxmrentals.com' }),
+      loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'postgres://x', CORS_ORIGINS: 'https://sxmrentals.app' }),
     ).toThrow(/ENCRYPTION_KEY/);
 
     expect(
@@ -193,7 +193,7 @@ describe('settings checks', () => {
         NODE_ENV: 'production',
         DATABASE_URL: 'postgres://x',
         ENCRYPTION_KEY: key,
-        CORS_ORIGINS: 'https://sxmrentals.com',
+        CORS_ORIGINS: 'https://sxmrentals.app',
       }).isProduction,
     ).toBe(true);
   });

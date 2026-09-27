@@ -52,16 +52,25 @@ services:
       - key: LOG_LEVEL
         value: info
       # ---- ADDRESSES: set in the Render dashboard ----
-      # There is no domain yet, so these are the free addresses Vercel gives
-      # the website and admin panel (…vercel.app). Set them there, and change
-      # them once a real domain exists — no code change needed either time.
+      # The website is live at https://www.sxmrentals.app (the bare
+      # sxmrentals.app redirects to it), so that is the canonical host.
       #
-      # APP_URL: the customer website, used for links inside emails.
+      # THE API BELONGS ON api.sxmrentals.app, added under this service's
+      # Settings -> Custom Domains, not on its …onrender.com address. Not for
+      # tidiness: the session cookie carries the __Host- prefix and
+      # SameSite=Lax, so a browser will not send it from the website to an API
+      # on a different domain — signing in on the website cannot work at all
+      # across onrender.com. Under the same domain the two are "same-site",
+      # the cookie travels, and no proxy or workaround is needed.
+      #
+      # APP_URL: the customer website, used for links inside emails. Use the
+      # www host, with no trailing slash: https://www.sxmrentals.app
       - key: APP_URL
         sync: false
       # CORS_ORIGINS: the only sites allowed to call this API from a browser,
       # comma separated, all https. Left empty, no browser site can call it
-      # (the phone app is unaffected — it is not a browser).
+      # (the phone app is unaffected — it is not a browser). Today:
+      # https://www.sxmrentals.app plus the admin panel's own address.
       - key: CORS_ORIGINS
         sync: false
       # ---- SECRETS: set in the Render dashboard, never in this file ----
