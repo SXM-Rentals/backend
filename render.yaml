@@ -65,6 +65,24 @@ services:
       - key: CORS_ORIGINS
         sync: false
       # ---- SECRETS: set in the Render dashboard, never in this file ----
+      # RESEND_API_KEY: without it, no email is sent at all — the server writes
+      # a loud warning to the logs instead of quietly dropping it.
+      - key: RESEND_API_KEY
+        sync: false
+      # EMAIL_FROM: who emails appear to come from. Until a domain is verified
+      # in Resend, leave it unset: the code falls back to Resend's shared test
+      # address, which only delivers to the Resend account owner's own inbox.
+      - key: EMAIL_FROM
+        sync: false
+      # EMAIL_REPLY_TO: where replies go, if that should differ from the sender.
+      - key: EMAIL_REPLY_TO
+        sync: false
+      # EMAIL_LOGO_URL: the logo drawn at the top of every email. It must load
+      # WITHOUT signing in, so it cannot point at a Vercel site that still has
+      # deployment protection switched on — readers would see the words
+      # "SXM Rentals" instead of the image.
+      - key: EMAIL_LOGO_URL
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: ENCRYPTION_KEY
