@@ -42,13 +42,20 @@ import type { Database } from '../../db/client.js';
 import { providers } from '../../db/schema/index.js';
 import { AppError, notFound } from '../../lib/errors.js';
 import { isUuid } from '../../lib/ownership.js';
+import type { PhotoStorage } from '../../lib/storage.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
 import {
   addVehicle,
   applyAsProvider,
+  attachVehiclePhoto,
   closeBusiness,
+  listVehiclePhotos,
+  ownVehicleId,
+  photoUploadTicket,
+  removeVehiclePhoto,
+  reorderVehiclePhotos,
   getBusinessProfile,
   getPayoutAccount,
   getProviderBooking,
@@ -71,7 +78,7 @@ import {
 } from '../../services/messaging/index.js';
 import { toProvider } from '../../services/serializers/vehicles.js';
 
-export type ProviderRouteOptions = { db: Database; gateway: PaymentGateway; config: Config };
+export type ProviderRouteOptions = { db: Database; gateway: PaymentGateway; config: Config; storage: PhotoStorage };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
 const listQuery = z.object({
@@ -80,6 +87,11 @@ const listQuery = z.object({
   offset: z.coerce.number().int().min(0).max(10_000).default(0),
 });
 const idParam = z.object({ id: z.string().max(64) });
+const photoParams = z.object({ id: z.string().max(64), photoId: z.string().max(64) });
+// Only an address, and only one that storage recognises as this car's — the
+// check that matters happens in the service, not here.
+const photoBody = z.object({ url: z.url().max(500) });
+const photoOrderBody = z.object({ order: z.array(z.string().max(64)).min(1).max(12) });
 
 const applyBody = z.object({
   businessName: z.string().trim().min(2).max(120),
@@ -150,7 +162,7 @@ const providerMessageBody = z.object({
 });
 
 export default async function providerRoutes(app: FastifyInstance, options: ProviderRouteOptions) {
-  const { db, gateway, config } = options;
+  const { db, gateway, config , storage } = options;
 
   // Who is signed in, and which business they act for.
   const businessFor = async (request: Parameters<typeof requireCustomer>[0]) =>
@@ -229,6 +241,44 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { id } = parseInput(idParam, request.params);
     const patch = parseInput(vehiclePatchBody, request.body);
     return updateVehicle(db, providerId, id, patch);
+  });
+
+  // ---- THE CAR'S PHOTOS ----
+  // The photo itself never comes through here: the app asks for a ticket,
+  // uploads straight to Cloudinary with it, then tells us the address. See
+  // lib/storage.ts for why, and what stops an address being made up.
+  app.get('/me/vehicles/:id/photos', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    // Confirms the car is theirs before saying anything about it.
+    return listVehiclePhotos(db, await ownVehicleId(db, providerId, id));
+  });
+
+  app.post('/me/vehicles/:id/photos/upload-ticket', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    return photoUploadTicket(db, storage, providerId, id);
+  });
+
+  app.post('/me/vehicles/:id/photos', async (request, reply) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(photoBody, request.body);
+    const photos = await attachVehiclePhoto(db, storage, providerId, id, body);
+    return reply.status(201).send(photos);
+  });
+
+  app.patch('/me/vehicles/:id/photos', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(photoOrderBody, request.body);
+    return reorderVehiclePhotos(db, providerId, id, body);
+  });
+
+  app.delete('/me/vehicles/:id/photos/:photoId', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id, photoId } = parseInput(photoParams, request.params);
+    return removeVehiclePhoto(db, storage, providerId, id, photoId);
   });
 
   app.delete('/me/vehicles/:id', async (request, reply) => {

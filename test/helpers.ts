@@ -14,6 +14,7 @@ import { loadConfig, type Config } from '../src/config.js';
 import { createAdminAuthService } from '../src/services/admin/auth.js';
 import { connectPglite, type Database } from '../src/db/client.js';
 import { bookings, customers, providers, vehicles } from '../src/db/schema/index.js';
+import type { PhotoStorage } from '../src/lib/storage.js';
 import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
 import { AppError } from '../src/lib/errors.js';
 import type { PaymentGateway, WebhookEvent } from '../src/lib/stripe.js';
@@ -37,7 +38,13 @@ export type TestContext = {
 
 // ---- A PRIVATE COPY OF THE API ----
 export async function createTestContext(
-  options: { extend?: (app: FastifyInstance) => void; env?: Record<string, string> } = {},
+  options: {
+    extend?: (app: FastifyInstance) => void;
+    env?: Record<string, string>;
+    // A stand-in for Cloudinary. Left out, photo uploads answer "not switched
+    // on yet", which is what production did until the account existed.
+    storage?: PhotoStorage;
+  } = {},
 ): Promise<TestContext> {
   const connection = await connectPglite();
   await connection.migrate();
@@ -60,6 +67,7 @@ export async function createTestContext(
     email,
     breachedPasswords: { isBreached: async (password) => breachedPasswords.has(password) },
     payments: gateway,
+    ...(options.storage ? { storage: options.storage } : {}),
     extend: options.extend,
   });
   await app.ready();

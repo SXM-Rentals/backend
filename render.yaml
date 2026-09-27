@@ -104,6 +104,14 @@ services:
         sync: false
       - key: ENCRYPTION_KEY
         sync: false
+      # Cloudinary, where car photos are kept. The secret signs each upload,
+      # so a business can only upload into the folder for its own car.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET

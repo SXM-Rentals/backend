@@ -45,6 +45,12 @@ const envSchema = z
     SOCIAL_TIKTOK_URL: z.string().min(1).optional(),
     SOCIAL_INSTAGRAM_URL: z.string().min(1).optional(),
     SOCIAL_FACEBOOK_URL: z.string().min(1).optional(),
+    // Cloudinary, where car photos are kept. Until these are set, the photo
+    // endpoints answer "not switched on yet" rather than accepting a photo that
+    // goes nowhere.
+    CLOUDINARY_CLOUD_NAME: z.string().min(1).optional(),
+    CLOUDINARY_API_KEY: z.string().min(1).optional(),
+    CLOUDINARY_API_SECRET: z.string().min(1).optional(),
     // Stripe. Until these are set, the payment and deposit endpoints answer
     // "not switched on yet" rather than pretending to take money.
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
@@ -96,6 +102,9 @@ export type Config = {
   emailReplyTo: string | undefined;
   // TikTok, Instagram, Facebook, in the order they are shown.
   socialAccounts: { name: string; url: string | undefined }[];
+  cloudinaryCloudName: string | undefined;
+  cloudinaryApiKey: string | undefined;
+  cloudinaryApiSecret: string | undefined;
   encryptionKey: string | undefined;
   adminIpAllowlist: string[];
   stripeSecretKey: string | undefined;
@@ -149,6 +158,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       { name: 'Instagram', url: env.SOCIAL_INSTAGRAM_URL },
       { name: 'Facebook', url: env.SOCIAL_FACEBOOK_URL },
     ],
+    cloudinaryCloudName: env.CLOUDINARY_CLOUD_NAME,
+    cloudinaryApiKey: env.CLOUDINARY_API_KEY,
+    cloudinaryApiSecret: env.CLOUDINARY_API_SECRET,
     encryptionKey: env.ENCRYPTION_KEY,
     adminIpAllowlist: splitList(env.ADMIN_IP_ALLOWLIST),
     stripeSecretKey: env.STRIPE_SECRET_KEY,

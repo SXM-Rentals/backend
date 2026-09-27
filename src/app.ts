@@ -25,6 +25,7 @@ import {
   type EmailSender,
 } from './lib/email.js';
 import { createHibpChecker, skipBreachedPasswordCheck, type BreachedPasswordChecker } from './lib/passwords.js';
+import { createCloudinaryStorage, createUnconfiguredStorage, type PhotoStorage } from './lib/storage.js';
 import { registerAuth } from './middleware/auth.js';
 import { registerErrorHandler } from './middleware/error-handler.js';
 import { registerCors } from './plugins/cors.js';
@@ -57,6 +58,7 @@ export type AppDependencies = {
   email?: EmailSender;
   breachedPasswords?: BreachedPasswordChecker;
   payments?: PaymentGateway;
+  storage?: PhotoStorage;
   // A chance to add extra routes before the app is sealed (used by tests).
   extend?: (app: FastifyInstance) => void | Promise<void>;
 };
@@ -124,6 +126,20 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
           currency: config.currency,
         })
       : createUnconfiguredGateway());
+  // Where car photos are kept. All three keys or none: a half-set account
+  // cannot sign an upload, so it would fail at the worst moment instead of the
+  // first one.
+  const storage =
+    deps.storage ??
+    (config.cloudinaryCloudName && config.cloudinaryApiKey && config.cloudinaryApiSecret
+      ? createCloudinaryStorage({
+          cloudName: config.cloudinaryCloudName,
+          apiKey: config.cloudinaryApiKey,
+          apiSecret: config.cloudinaryApiSecret,
+          logger: app.log,
+        })
+      : createUnconfiguredStorage());
+
   // Tells customers what has happened: in the app's notification list, and by
   // email for the things that warrant one.
   const notifications = createNotificationService({
@@ -150,7 +166,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(authRoutes, { prefix: '/auth', auth, config });
       await api.register(customerRoutes, { prefix: '/customers', auth, config });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
-      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config });
+      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage });
       await api.register(bookingRoutes, { prefix: '/bookings', db, notifications });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications });
       await api.register(messageRoutes, { prefix: '/messages', db });

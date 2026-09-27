@@ -91,6 +91,7 @@ readable list, if any are wrong — and production is stricter: it requires
 | `EMAIL_FROM` | Who emails come from. Resend's test address until a domain is verified, and then only to your own inbox |
 | `EMAIL_REPLY_TO` | Where replies go, if that should differ from the sender |
 | `SOCIAL_TIKTOK_URL` `SOCIAL_INSTAGRAM_URL` `SOCIAL_FACEBOOK_URL` | The accounts in every email's footer. Empty = the name is shown as plain words, never as a dead link |
+| `CLOUDINARY_CLOUD_NAME` `CLOUDINARY_API_KEY` `CLOUDINARY_API_SECRET` | Where car photos are kept. All three or none; empty means photo uploads answer "not switched on yet" |
 | `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
 | `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
 | `CURRENCY` | What bookings are charged in (`usd`) |
@@ -196,6 +197,9 @@ Everything lives under `/api/v1`.
 | GET | `/providers/me/summary` | The dashboard headline figures |
 | GET · POST | `/providers/me/vehicles` | The whole fleet, approved or not · add a car |
 | PATCH · DELETE | `/providers/me/vehicles/:id` | Edit one · take one off the platform |
+| POST | `/providers/me/vehicles/:id/photos/upload-ticket` | Permission to upload one photo, straight to Cloudinary |
+| GET · POST | `/providers/me/vehicles/:id/photos` | Its photos · record one that was just uploaded |
+| PATCH · DELETE | `/providers/me/vehicles/:id/photos…` | Reorder them (first is the cover) · remove one |
 | GET | `/providers/me/performance` | How each car is doing |
 | GET | `/providers/me/bookings` | Bookings across the fleet |
 | GET | `/providers/me/bookings/:id` | One of them |
@@ -378,6 +382,16 @@ worked out from the session, never from anything in the request**, so there is
 no business id to tamper with — and every query underneath is tied to that one
 business. A business asking for another's car or booking is told it does not
 exist.
+
+**A car photo never passes through this server.** A phone on hotel wifi
+uploading eight photos would tie up the API for minutes, and the API only accepts
+a 1MB request anyway. So the backend signs a ticket — "you may upload into this
+one folder, for the next hour" — the app uploads straight to Cloudinary, and then
+tells us the address it got back. **Which means that address cannot be trusted**:
+it is only accepted when Cloudinary serves it AND it sits inside the folder for
+that particular car, the folder the ticket was signed for. A business cannot put
+a photo on another business's car, or point a listing at somewhere else on the
+internet. Twelve photos per car, 8MB each.
 
 **A business never receives a customer's phone number or email.** Its bookings
 are built by a serializer with no field to put one in: it gets a display name

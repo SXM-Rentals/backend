@@ -36,6 +36,7 @@ import {
   vehicles,
 } from '../../db/schema/index.js';
 import { AppError, conflict, notFound } from '../../lib/errors.js';
+import type { PhotoStorage } from '../../lib/storage.js';
 import type { Actor } from '../../lib/ownership.js';
 import { isUuid } from '../../lib/ownership.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
@@ -671,4 +672,179 @@ export async function closeBusiness(db: Database, providerId: string) {
   });
 
   return { businessName: provider.name, closedAt: closedAt.toISOString(), vehiclesDelisted: delisted };
+}
+
+// ---- CAR PHOTOS ----
+// A listing with no photo is not a listing anybody books, so this is the part of
+// adding a car that actually sells it.
+//
+// The photo goes from the business's phone straight to Cloudinary, never through
+// this server (see lib/storage.ts for why). Three steps:
+//
+//   1. ask for a ticket    POST /providers/me/vehicles/:id/photos/upload-ticket
+//   2. upload to Cloudinary with the ticket's fields — the app does this itself
+//   3. tell us the address POST /providers/me/vehicles/:id/photos
+//
+// Each car has its own folder, the ticket is only valid for that folder, and in
+// step 3 an address outside it is refused — so one business cannot attach a
+// photo to another's car, or point a listing at somewhere else on the internet.
+
+// Enough for every angle of a car and the interior, without one business filling
+// the storage on its own.
+const MAX_PHOTOS_PER_VEHICLE = 12;
+
+// Both the folder a ticket is signed for and the folder an address must sit in,
+// worked out the same way each time so the two cannot disagree.
+function photoFolder(providerId: string, vehicleId: string): string {
+  return `sxm-rentals/vehicles/${providerId}/${vehicleId}`;
+}
+
+export async function photoUploadTicket(
+  db: Database,
+  storage: PhotoStorage,
+  providerId: string,
+  vehicleId: string,
+) {
+  const vehicle = await loadOwnVehicle(db, providerId, vehicleId);
+  const existing = await db
+    .select({ id: vehiclePhotos.id })
+    .from(vehiclePhotos)
+    .where(eq(vehiclePhotos.vehicleId, vehicle.id));
+  if (existing.length >= MAX_PHOTOS_PER_VEHICLE) {
+    throw conflict(
+      'too_many_photos',
+      `This car already has ${MAX_PHOTOS_PER_VEHICLE} photos. Remove one before adding another.`,
+    );
+  }
+
+  const ticket = storage.ticketFor(photoFolder(providerId, vehicle.id));
+  return { ...ticket, photosAllowed: MAX_PHOTOS_PER_VEHICLE - existing.length };
+}
+
+// Step 3: the address the upload produced. The first photo added is the one
+// shown in search results, until the business reorders them.
+export async function attachVehiclePhoto(
+  db: Database,
+  storage: PhotoStorage,
+  providerId: string,
+  vehicleId: string,
+  input: { url: string },
+) {
+  const vehicle = await loadOwnVehicle(db, providerId, vehicleId);
+  if (!storage.ownsAddress(input.url, photoFolder(providerId, vehicle.id))) {
+    // Deliberately not "that address is not allowed because…": there is nothing
+    // to learn here by trying variations.
+    throw new AppError(
+      400,
+      'photo_not_recognised',
+      'That photo was not uploaded for this car. Ask for a new upload ticket and try again.',
+    );
+  }
+
+  const existing = await db
+    .select({ id: vehiclePhotos.id, storageKey: vehiclePhotos.storageKey, position: vehiclePhotos.position })
+    .from(vehiclePhotos)
+    .where(eq(vehiclePhotos.vehicleId, vehicle.id));
+  if (existing.length >= MAX_PHOTOS_PER_VEHICLE) {
+    throw conflict('too_many_photos', `This car already has ${MAX_PHOTOS_PER_VEHICLE} photos.`);
+  }
+  // Uploading the same photo twice — a retry after a dropped connection — must
+  // not leave the listing showing it twice.
+  if (existing.some((photo) => photo.storageKey === input.url)) {
+    return listVehiclePhotos(db, vehicle.id);
+  }
+
+  const nextPosition = existing.reduce((highest, photo) => Math.max(highest, photo.position), -1) + 1;
+  await db.insert(vehiclePhotos).values({ vehicleId: vehicle.id, storageKey: input.url, position: nextPosition });
+  return listVehiclePhotos(db, vehicle.id);
+}
+
+export async function removeVehiclePhoto(
+  db: Database,
+  storage: PhotoStorage,
+  providerId: string,
+  vehicleId: string,
+  photoId: string,
+) {
+  const vehicle = await loadOwnVehicle(db, providerId, vehicleId);
+  if (!isUuid(photoId)) throw notFound();
+
+  const [photo] = await db
+    .select()
+    .from(vehiclePhotos)
+    .where(and(eq(vehiclePhotos.id, photoId), eq(vehiclePhotos.vehicleId, vehicle.id)))
+    .limit(1);
+  // Somebody else's photo id gets "not found", exactly like one that does not
+  // exist — the same rule as everywhere else.
+  if (!photo) throw notFound();
+
+  await db.delete(vehiclePhotos).where(eq(vehiclePhotos.id, photo.id));
+  // Close the gap it left, so positions stay 0,1,2… and "first" keeps meaning
+  // the cover photo.
+  const remaining = await db
+    .select({ id: vehiclePhotos.id })
+    .from(vehiclePhotos)
+    .where(eq(vehiclePhotos.vehicleId, vehicle.id))
+    .orderBy(vehiclePhotos.position, vehiclePhotos.createdAt);
+  await Promise.all(
+    remaining.map((row, index) =>
+      db.update(vehiclePhotos).set({ position: index }).where(eq(vehiclePhotos.id, row.id)),
+    ),
+  );
+
+  // The listing has already lost it; the file going too is best effort.
+  await storage.remove(photo.storageKey);
+  return listVehiclePhotos(db, vehicle.id);
+}
+
+// The order decides which photo sells the car, so a business can set it.
+export async function reorderVehiclePhotos(
+  db: Database,
+  providerId: string,
+  vehicleId: string,
+  input: { order: string[] },
+) {
+  const vehicle = await loadOwnVehicle(db, providerId, vehicleId);
+  const photos = await db.select().from(vehiclePhotos).where(eq(vehiclePhotos.vehicleId, vehicle.id));
+
+  // Every photo, each one once: a partial list would leave the rest in an order
+  // nobody chose.
+  const given = new Set(input.order);
+  if (given.size !== input.order.length || given.size !== photos.length) {
+    throw new AppError(400, 'incomplete_order', 'List every photo of this car exactly once, in the order you want.');
+  }
+  const known = new Set(photos.map((photo) => photo.id));
+  if (input.order.some((id) => !known.has(id))) throw notFound();
+
+  await Promise.all(
+    input.order.map((id, index) =>
+      db.update(vehiclePhotos).set({ position: index }).where(eq(vehiclePhotos.id, id)),
+    ),
+  );
+  return listVehiclePhotos(db, vehicle.id);
+}
+
+// What the business's own screens show: the id is needed to remove or reorder,
+// which is why this is not just the list of addresses customers get.
+export async function listVehiclePhotos(db: Database, vehicleId: string) {
+  const rows = await db
+    .select()
+    .from(vehiclePhotos)
+    .where(eq(vehiclePhotos.vehicleId, vehicleId))
+    .orderBy(vehiclePhotos.position, vehiclePhotos.createdAt);
+  return rows.map((row, index) => ({
+    id: row.id,
+    url: row.storageKey,
+    position: row.position,
+    // The one customers see first in search results.
+    isCover: index === 0,
+  }));
+}
+
+// Confirms a car belongs to this business and returns its id, for the screens
+// that only need to look. A car belonging to somebody else is "not found",
+// never "not yours".
+export async function ownVehicleId(db: Database, providerId: string, vehicleId: string): Promise<string> {
+  const vehicle = await loadOwnVehicle(db, providerId, vehicleId);
+  return vehicle.id;
 }
