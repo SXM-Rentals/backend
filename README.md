@@ -169,6 +169,7 @@ Everything lives under `/api/v1`.
 | GET | `/auth/sessions` | The devices you are signed in on |
 | DELETE | `/auth/sessions/:id` | Sign out one of them |
 | GET | `/customers/me` | Your own account, in the apps' `User` shape |
+| POST | `/customers/me/close` | Close your own account for good (asks for the password again) |
 | GET | `/vehicles` | Search and filter cars — every filter the Search screen offers |
 | GET | `/vehicles/:id` | One car, with its photos, declared damage and booked days |
 | GET | `/vehicles/:id/reviews` | Its reviews |
@@ -200,6 +201,7 @@ Everything lives under `/api/v1`.
 | GET | `/providers/me/bookings/:id` | One of them |
 | GET | `/providers/me/messages` · `/messages/:id` | Conversations with renters |
 | POST | `/providers/me/messages/:id/messages` · `/read` | Reply · mark as read |
+| POST | `/providers/me/close` | Close the business: every car comes off the site (owner only) |
 | GET | `/providers/me/payouts` | What SXM Rentals has paid them |
 | GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |
 | POST | `/admin/auth/login` · `/mfa/enroll` · `/mfa/verify` · `/logout` | Staff sign-in, in two steps |

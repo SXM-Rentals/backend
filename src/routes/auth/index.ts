@@ -28,7 +28,7 @@ import { z } from 'zod';
 import type { Config } from '../../config.js';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../lib/passwords.js';
 import { parseInput } from '../../lib/validate.js';
-import { requireCustomer, sessionCookieName } from '../../middleware/auth.js';
+import { clearSessionCookie, requireCustomer, sessionCookieName } from '../../middleware/auth.js';
 import { AUTH_LIMITS } from '../../plugins/rate-limit.js';
 import type { AuthService } from '../../services/auth/index.js';
 import type { NewSession } from '../../services/auth/sessions.js';
@@ -88,10 +88,6 @@ export default async function authRoutes(app: FastifyInstance, options: AuthRout
     });
   }
 
-  function clearSessionCookie(reply: FastifyReply) {
-    reply.clearCookie(cookieName, { path: '/', httpOnly: true, secure: config.isProduction, sameSite: 'lax' });
-  }
-
   // Web gets a cookie; mobile gets the code itself in the response.
   function deliverSession(reply: FastifyReply, session: NewSession, client: 'web' | 'mobile') {
     if (client === 'mobile') return { expiresAt: session.expiresAt.toISOString(), token: session.token };
@@ -136,13 +132,13 @@ export default async function authRoutes(app: FastifyInstance, options: AuthRout
 
   app.post('/logout', async (request, reply) => {
     await auth.logout(requireCustomer(request));
-    clearSessionCookie(reply);
+    clearSessionCookie(reply, config);
     return reply.status(204).send();
   });
 
   app.post('/logout-all', async (request, reply) => {
     await auth.logoutEverywhere(requireCustomer(request));
-    clearSessionCookie(reply);
+    clearSessionCookie(reply, config);
     return reply.status(204).send();
   });
 
@@ -157,7 +153,7 @@ export default async function authRoutes(app: FastifyInstance, options: AuthRout
   app.post('/password/reset', { config: { rateLimit: AUTH_LIMITS.useLink } }, async (request, reply) => {
     const { token, newPassword } = parseInput(resetBody, request.body);
     await auth.resetPassword(token, newPassword);
-    clearSessionCookie(reply);
+    clearSessionCookie(reply, config);
     return { message: 'Your password has been changed and you have been signed out everywhere. Please sign in again.' };
   });
 
@@ -179,7 +175,7 @@ export default async function authRoutes(app: FastifyInstance, options: AuthRout
     const actor = requireCustomer(request);
     const { id } = parseInput(sessionParams, request.params);
     await auth.revokeOwnSession(actor, id);
-    if (id === actor.sessionId) clearSessionCookie(reply);
+    if (id === actor.sessionId) clearSessionCookie(reply, config);
     return reply.status(204).send();
   });
 }

@@ -40,7 +40,7 @@ import { z } from 'zod';
 import type { Config } from '../../config.js';
 import type { Database } from '../../db/client.js';
 import { providers } from '../../db/schema/index.js';
-import { notFound } from '../../lib/errors.js';
+import { AppError, notFound } from '../../lib/errors.js';
 import { isUuid } from '../../lib/ownership.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import { parseInput } from '../../lib/validate.js';
@@ -48,6 +48,7 @@ import { requireCustomer } from '../../middleware/auth.js';
 import {
   addVehicle,
   applyAsProvider,
+  closeBusiness,
   getBusinessProfile,
   getPayoutAccount,
   getProviderBooking,
@@ -191,6 +192,18 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { providerId } = await businessFor(request);
     const patch = parseInput(profilePatchBody, request.body);
     return updateBusinessProfile(db, providerId, patch);
+  });
+
+  // Closing the business for good. Every car comes off the site and nobody can
+  // act for it again — so it is refused while a rental is running, a deposit is
+  // held, or a payment to them is still on its way.
+  app.post('/me/close', async (request) => {
+    const { providerId, role } = await businessFor(request);
+    // Staff who work for the business cannot close it; only whoever owns it.
+    if (role !== 'owner') {
+      throw new AppError(403, 'owner_only', 'Only the owner of the business can close it.');
+    }
+    return closeBusiness(db, providerId);
   });
 
   app.get('/me/summary', async (request) => {

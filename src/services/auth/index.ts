@@ -18,14 +18,22 @@
 //   - Resetting or changing a password signs the account out everywhere.
 //   - Passwords known from data breaches are refused.
 
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Config } from '../../config.js';
 import type { Database } from '../../db/client.js';
-import { authTokens, credentials, customers } from '../../db/schema/index.js';
+import {
+  authTokens,
+  bookings,
+  credentials,
+  customers,
+  deposits,
+  providerMembers,
+  providers,
+} from '../../db/schema/index.js';
 import { generateToken, hashToken } from '../../lib/crypto.js';
 import type { EmailMessage, EmailSender } from '../../lib/email.js';
 import { buildEmail } from '../../lib/email-templates.js';
-import { AppError, badRequest, notFound, tooManyRequests, unauthorized } from '../../lib/errors.js';
+import { AppError, badRequest, conflict, notFound, tooManyRequests, unauthorized } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
 import {
   getDummyPasswordHash,
@@ -196,6 +204,24 @@ export function createAuthService(deps: AuthServiceDeps) {
         ],
         button: { label: 'This was not me', url: `${config.appUrl}/forgot-password` },
         note: 'If you made this change, there is nothing to do.',
+      },
+      brand,
+    );
+  }
+
+  function accountClosedEmail(to: string, firstName: string): EmailMessage {
+    return buildEmail(
+      to,
+      'Your SXM Rentals account is closed',
+      {
+        preheader: 'Your account is closed and every device is signed out.',
+        title: 'Your account is closed',
+        paragraphs: [
+          `Hi ${firstName},`,
+          'Your SXM Rentals account is closed and every device has been signed out. Nobody can sign in with this email address any more.',
+          'Your past rentals are kept, because the businesses you rented from and our own records have to account for them. Nothing further will be charged.',
+        ],
+        note: 'Changed your mind? Write to us and we can talk about opening it again.',
       },
       brand,
     );
@@ -435,6 +461,86 @@ export function createAuthService(deps: AuthServiceDeps) {
 
       sendInBackground(passwordChangedEmail(account.customer.email, account.customer.firstName));
       return session;
+    },
+
+    // ---- CLOSING YOUR OWN ACCOUNT ----
+    // The same rules the admin panel applies when staff close one, for the same
+    // reason: closing while money is in the air would strand it. A rental that
+    // is running or about to, or a deposit still held, has to finish first.
+    //
+    // The password is asked for again. Somebody who walks up to an unlocked
+    // laptop should not be able to erase the account in two clicks, and this is
+    // not a step that can be undone from the website.
+    async closeOwnAccount(actor: Actor, input: { password: string }): Promise<void> {
+      const [account] = await db
+        .select({ customer: customers, credential: credentials })
+        .from(customers)
+        .innerJoin(credentials, eq(credentials.customerId, customers.id))
+        .where(and(eq(customers.id, actor.customerId), isNull(customers.deletedAt)))
+        .limit(1);
+      if (!account) throw unauthorized();
+
+      if (!(await verifyPassword(account.credential.passwordHash, input.password))) {
+        throw new AppError(400, 'wrong_password', 'Your password is not correct.');
+      }
+
+      // Somebody who runs a rental business closes the business first. Doing it
+      // the other way would leave a business with cars listed and nobody who
+      // can act for it.
+      const [ownedBusiness] = await db
+        .select({ name: providers.businessName })
+        .from(providerMembers)
+        .innerJoin(providers, eq(providers.id, providerMembers.providerId))
+        .where(
+          and(
+            eq(providerMembers.customerId, actor.customerId),
+            eq(providerMembers.role, 'owner'),
+            isNull(providers.deletedAt),
+          ),
+        )
+        .limit(1);
+      if (ownedBusiness) {
+        throw conflict(
+          'owns_business',
+          `You run ${ownedBusiness.name} on SXM Rentals. Close the business first, then close your account.`,
+        );
+      }
+
+      const [liveBooking] = await db
+        .select({ reference: bookings.reference, status: bookings.status })
+        .from(bookings)
+        .where(and(eq(bookings.customerId, actor.customerId), inArray(bookings.status, ['upcoming', 'active'])))
+        .limit(1);
+      if (liveBooking) {
+        throw conflict(
+          'has_live_rental',
+          `You have a rental that is ${liveBooking.status} (${liveBooking.reference}). Your account can be closed once it is finished.`,
+        );
+      }
+
+      const [heldDeposit] = await db
+        .select({ id: deposits.id })
+        .from(deposits)
+        .innerJoin(bookings, eq(bookings.id, deposits.bookingId))
+        .where(and(eq(bookings.customerId, actor.customerId), eq(deposits.status, 'held')))
+        .limit(1);
+      if (heldDeposit) {
+        throw conflict(
+          'has_held_deposit',
+          'A deposit is still being held on your card. Your account can be closed once it has been given back.',
+        );
+      }
+
+      // The row stays and is marked closed rather than deleted: past bookings,
+      // payouts to businesses and the audit trail all point at it, and sign-in,
+      // sessions and "my account" already refuse a closed one.
+      await db.transaction(async (tx) => {
+        await tx.update(customers).set({ deletedAt: new Date() }).where(eq(customers.id, actor.customerId));
+        await tx.delete(providerMembers).where(eq(providerMembers.customerId, actor.customerId));
+        await revokeAllSessions(tx, actor.customerId);
+      });
+
+      sendInBackground(accountClosedEmail(account.customer.email, account.customer.firstName));
     },
 
     // The devices this person is signed in on.

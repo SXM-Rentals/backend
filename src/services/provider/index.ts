@@ -596,3 +596,79 @@ export async function getPayoutAccount(db: Database, gateway: PaymentGateway, pr
     country: account.country,
   };
 }
+
+// ---- CLOSING THE BUSINESS ----
+// What a business owner does when they stop renting cars out. It is refused
+// while money is in the air, for the same reason a customer's account is: a
+// closed business with a rental running, a deposit held on somebody's card, or
+// a payout still owed leaves money nobody can chase.
+//
+// Every car is taken off the site and the business is marked closed. The rows
+// stay: past bookings, the payouts already made and the audit trail all point
+// at them, and every public query already hides a closed business.
+//
+// It does not close the owner's own customer account — they may still rent a
+// car themselves.
+export async function closeBusiness(db: Database, providerId: string) {
+  const [provider] = await db
+    .select({ name: providers.businessName, deletedAt: providers.deletedAt })
+    .from(providers)
+    .where(eq(providers.id, providerId))
+    .limit(1);
+  if (!provider) throw notFound();
+  if (provider.deletedAt) throw conflict('already_closed', 'This business is already closed.');
+
+  const [liveBooking] = await db
+    .select({ reference: bookings.reference, status: bookings.status })
+    .from(bookings)
+    .where(and(eq(bookings.providerId, providerId), inArray(bookings.status, ['upcoming', 'active'])))
+    .limit(1);
+  if (liveBooking) {
+    throw conflict(
+      'has_live_rental',
+      `A rental is ${liveBooking.status} (${liveBooking.reference}). The business can be closed once it is finished.`,
+    );
+  }
+
+  const [heldDeposit] = await db
+    .select({ id: deposits.id })
+    .from(deposits)
+    .innerJoin(bookings, eq(bookings.id, deposits.bookingId))
+    .where(and(eq(bookings.providerId, providerId), eq(deposits.status, 'held')))
+    .limit(1);
+  if (heldDeposit) {
+    throw conflict(
+      'has_held_deposit',
+      'A deposit is still being held on a customer\'s card. The business can be closed once it has been dealt with.',
+    );
+  }
+
+  // Money still owed TO the business. Closing now would be closing over the
+  // top of a payment that has not arrived.
+  const [pendingPayout] = await db
+    .select({ reference: payouts.reference })
+    .from(payouts)
+    .where(and(eq(payouts.providerId, providerId), inArray(payouts.status, ['pending', 'processing'])))
+    .limit(1);
+  if (pendingPayout) {
+    throw conflict(
+      'payout_pending',
+      `A payment to you is still on its way (${pendingPayout.reference}). The business can be closed once it has arrived.`,
+    );
+  }
+
+  const closedAt = new Date();
+  const delisted = await db.transaction(async (tx) => {
+    // Suspended, not deleted: the cars keep their history, their reviews and
+    // their place in past bookings, and staff can see what happened.
+    const rows = await tx
+      .update(vehicles)
+      .set({ listingStatus: 'suspended' })
+      .where(and(eq(vehicles.providerId, providerId), isNull(vehicles.deletedAt)))
+      .returning({ id: vehicles.id });
+    await tx.update(providers).set({ deletedAt: closedAt }).where(eq(providers.id, providerId));
+    return rows.length;
+  });
+
+  return { businessName: provider.name, closedAt: closedAt.toISOString(), vehiclesDelisted: delisted };
+}

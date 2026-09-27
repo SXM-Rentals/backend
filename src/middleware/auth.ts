@@ -14,7 +14,7 @@
 //
 // Routes then call the "require" helpers at the bottom to say who may use them.
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Config } from '../config.js';
 import type { Database } from '../db/client.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
@@ -37,6 +37,19 @@ declare module 'fastify' {
 // HTTPS-only, sent to this exact host, and not readable by other subdomains.
 export function sessionCookieName(config: Config): string {
   return config.isProduction ? '__Host-sxm_session' : 'sxm_session';
+}
+
+// Takes the session cookie away, with exactly the attributes it was set with —
+// a browser only replaces a cookie when they match. Used by signing out and by
+// closing an account, so there is one definition of it rather than two that can
+// drift apart.
+export function clearSessionCookie(reply: FastifyReply, config: Config): void {
+  reply.clearCookie(sessionCookieName(config), {
+    path: '/',
+    httpOnly: true,
+    secure: config.isProduction,
+    sameSite: 'lax',
+  });
 }
 
 // Staff sign in with their own cookie, under a different name, so a customer

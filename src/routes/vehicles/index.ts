@@ -61,7 +61,17 @@ export default async function vehicleRoutes(app: FastifyInstance, options: Vehic
   app.get('/', async (request) => {
     const filters = parseInput(searchQuery, request.query);
 
-    const conditions = [eq(vehicles.listingStatus, 'live'), isNull(vehicles.deletedAt)];
+    const conditions = [
+      eq(vehicles.listingStatus, 'live'),
+      isNull(vehicles.deletedAt),
+      // And its business still exists. Closing a business suspends its cars, so
+      // this is a second lock on the same door: if a car is ever left live by
+      // another path, it still cannot be found or booked.
+      sql`not exists (
+        select 1 from providers
+        where providers.id = ${vehicles.providerId} and providers.deleted_at is not null
+      )`,
+    ];
     if (filters.search) {
       // Matches the way the apps search: make, model or town.
       const term = `%${filters.search}%`;
@@ -136,7 +146,17 @@ export default async function vehicleRoutes(app: FastifyInstance, options: Vehic
     const [vehicle] = await db
       .select()
       .from(vehicles)
-      .where(and(eq(vehicles.id, id), eq(vehicles.listingStatus, 'live'), isNull(vehicles.deletedAt)))
+      .where(
+        and(
+          eq(vehicles.id, id),
+          eq(vehicles.listingStatus, 'live'),
+          isNull(vehicles.deletedAt),
+          sql`not exists (
+            select 1 from providers
+            where providers.id = ${vehicles.providerId} and providers.deleted_at is not null
+          )`,
+        ),
+      )
       .limit(1);
     if (!vehicle) throw notFound('We could not find that vehicle.');
 
