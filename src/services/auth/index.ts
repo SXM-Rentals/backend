@@ -223,7 +223,10 @@ export function createAuthService(deps: AuthServiceDeps) {
                 'Someone tried to create a new SXM Rentals account using this email address, which already has one.',
                 'If it was you, just sign in instead. If you have forgotten your password, you can reset it.',
               ],
-              button: { label: 'Sign in', url: `${config.appUrl}/sign-in` },
+              // /login, not /sign-in: the website answers both, but /sign-in is
+              // a redirect, and a link in an email should arrive where it means
+              // to go the first time.
+              button: { label: 'Sign in', url: `${config.appUrl}/login` },
               note: `Forgotten your password? ${config.appUrl}/forgot-password — if this was not you, you can ignore this email. Your account has not been changed.`,
             },
             brand,
