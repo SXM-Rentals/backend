@@ -17,6 +17,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
     "admin:create": "tsx --env-file-if-exists=.env src/scripts/create-admin.ts",
+    "admin:reset": "tsx --env-file-if-exists=.env src/scripts/admin-reset.ts",
     "tasks:daily": "tsx --env-file-if-exists=.env src/scripts/daily-tasks.ts"
   },
   "author": "Giordano Bertin-Maurice",

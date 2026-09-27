@@ -27,6 +27,10 @@ const envSchema = z
     // Addresses allowed to reach the admin API, comma separated. Empty means no
     // address restriction (two-factor still applies).
     ADMIN_IP_ALLOWLIST: z.string().default(''),
+    // The logo shown in emails. It MUST be reachable without signing in, or
+    // mail programs show the alt text instead. Defaults to the website's own
+    // copy; set this when the website is not public yet.
+    EMAIL_LOGO_URL: z.string().min(1).optional(),
     // Stripe. Until these are set, the payment and deposit endpoints answer
     // "not switched on yet" rather than pretending to take money.
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
@@ -71,6 +75,8 @@ export type Config = {
   corsOrigins: string[];
   appUrl: string;
   breachedPasswordCheck: boolean;
+  // Full address of the logo drawn at the top of every email.
+  emailLogoUrl: string;
   encryptionKey: string | undefined;
   adminIpAllowlist: string[];
   stripeSecretKey: string | undefined;
@@ -105,6 +111,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   }
 
   const env = result.data;
+  const appUrl = env.APP_URL.replace(/\/+$/, '');
   return {
     env: env.NODE_ENV,
     isProduction: env.NODE_ENV === 'production',
@@ -112,8 +119,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST,
     databaseUrl: env.DATABASE_URL,
     corsOrigins: splitList(env.CORS_ORIGINS),
-    appUrl: env.APP_URL.replace(/\/+$/, ''),
+    appUrl,
     breachedPasswordCheck: env.BREACHED_PASSWORD_CHECK === 'true',
+    emailLogoUrl: env.EMAIL_LOGO_URL ?? `${appUrl}/brand/logo-white.png`,
     encryptionKey: env.ENCRYPTION_KEY,
     adminIpAllowlist: splitList(env.ADMIN_IP_ALLOWLIST),
     stripeSecretKey: env.STRIPE_SECRET_KEY,

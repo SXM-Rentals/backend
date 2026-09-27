@@ -45,6 +45,12 @@ export const adminStaff = pgTable(
     mfaSecretEncrypted: text('mfa_secret_encrypted'),
     // Set the moment a first correct code proves the authenticator app works.
     mfaEnrolledAt: moment('mfa_enrolled_at'),
+    // True for an account created or reset from the admin panel, until its owner
+    // sets a password of their own. Until they do, the only things they can do
+    // are look at their own record and set that password — so the person who
+    // created the account cannot go on acting as them, and "who did this" in the
+    // audit log keeps meaning one person.
+    mustChangePassword: boolean('must_change_password').notNull().default(false),
     // Wrong passwords or codes in a row, and when the account may be tried again.
     failedLoginCount: integer('failed_login_count').notNull().default(0),
     lockedUntil: moment('locked_until'),

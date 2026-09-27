@@ -93,6 +93,12 @@ export const auditAction = pgEnum('audit_action', [
   'settings_changed',
   'dispute_assigned',
   'dispute_resolved',
+  // Staff accounts, managed from the panel rather than from the server.
+  'staff_created',
+  'staff_reset',
+  'staff_disabled',
+  'staff_enabled',
+  'password_changed',
 ]);
 export const auditSubjectType = pgEnum('audit_subject_type', [
   'customer',
@@ -101,6 +107,8 @@ export const auditSubjectType = pgEnum('audit_subject_type', [
   'booking',
   'payment',
   'platform',
+  // A staff member's own account, acted on by another staff member.
+  'staff',
 ]);
 export const kycProvider = pgEnum('kyc_provider', ['stripe_identity', 'persona', 'veriff', 'didit']);
 export const payoutEntity = pgEnum('payout_entity', ['us_llc', 'french_side', 'dutch_side']);

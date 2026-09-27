@@ -138,7 +138,7 @@ describe('when money moves', () => {
     const [deposit] = await ctx.db.select().from(deposits).where(eq(deposits.bookingId, booking.id));
     await sendWebhook(ctx.gateway.eventFor('payment_intent.amount_capturable_updated', deposit!.stripePaymentIntentId!));
 
-    const notifier = createNotificationService({ db: ctx.db, email: ctx.email, logger: { error: () => {} } });
+    const notifier = createNotificationService({ db: ctx.db, email: ctx.email, logger: { error: () => {} }, brand: { siteUrl: ctx.config.appUrl, logoUrl: ctx.config.emailLogoUrl } });
     const payments = await import('../src/services/payments/index.js');
     await payments
       .createPaymentService({ db: ctx.db, gateway: ctx.gateway, logger: { info: () => {}, warn: () => {} }, notifications: notifier })
@@ -168,7 +168,7 @@ describe('when money moves', () => {
 
 describe('reminders the day before', () => {
   it('reminds about tomorrow, and never twice', async () => {
-    const notifier = createNotificationService({ db: ctx.db, email: ctx.email, logger: { error: () => {} } });
+    const notifier = createNotificationService({ db: ctx.db, email: ctx.email, logger: { error: () => {} }, brand: { siteUrl: ctx.config.appUrl, logoUrl: ctx.config.emailLogoUrl } });
 
     // One car to collect tomorrow, one to bring back tomorrow.
     await post('/bookings', { vehicleId, startDate: dateIn(1), endDate: dateIn(4) }, asCustomer());

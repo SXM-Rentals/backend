@@ -24,6 +24,7 @@ import type { Database } from '../../db/client.js';
 import { authTokens, credentials, customers } from '../../db/schema/index.js';
 import { generateToken, hashToken } from '../../lib/crypto.js';
 import type { EmailMessage, EmailSender } from '../../lib/email.js';
+import { buildEmail } from '../../lib/email-templates.js';
 import { AppError, badRequest, notFound, tooManyRequests, unauthorized } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
 import {
@@ -90,6 +91,9 @@ const invalidLink = () =>
 
 export function createAuthService(deps: AuthServiceDeps) {
   const { db, config, email, breachedPasswords, logger } = deps;
+
+  // The logo and website address every email is drawn with.
+  const brand = { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl };
 
   // ---- SMALL HELPERS ----
 
@@ -162,33 +166,39 @@ export function createAuthService(deps: AuthServiceDeps) {
   }
 
   function verificationEmail(to: string, firstName: string, token: string): EmailMessage {
-    return {
+    return buildEmail(
       to,
-      subject: 'Confirm your email for SXM Rentals',
-      text: [
-        `Hi ${firstName},`,
-        '',
-        'Please confirm this is your email address by opening the link below. It works once and expires in 24 hours.',
-        '',
-        `${config.appUrl}/verify-email?token=${token}`,
-        '',
-        'SXM Rentals will never ask for your password by email.',
-      ].join('\n'),
-    };
+      'Confirm your email for SXM Rentals',
+      {
+        preheader: 'One tap to confirm your email and start booking.',
+        title: 'Confirm your email',
+        paragraphs: [
+          `Hi ${firstName},`,
+          'Please confirm this is your email address. Then you can sign in and book a car.',
+        ],
+        button: { label: 'Confirm my email', url: `${config.appUrl}/verify-email?token=${token}` },
+        note: 'This link works once and expires in 24 hours. If you did not create an account, you can ignore this email.',
+      },
+      brand,
+    );
   }
 
   function passwordChangedEmail(to: string, firstName: string): EmailMessage {
-    return {
+    return buildEmail(
       to,
-      subject: 'Your SXM Rentals password was changed',
-      text: [
-        `Hi ${firstName},`,
-        '',
-        'The password for your SXM Rentals account was just changed, and every device was signed out.',
-        '',
-        `If this was not you, reset your password now: ${config.appUrl}/forgot-password`,
-      ].join('\n'),
-    };
+      'Your SXM Rentals password was changed',
+      {
+        preheader: 'Your password changed and every device was signed out.',
+        title: 'Your password was changed',
+        paragraphs: [
+          `Hi ${firstName},`,
+          'The password for your SXM Rentals account was just changed, and every device was signed out.',
+        ],
+        button: { label: 'This was not me', url: `${config.appUrl}/forgot-password` },
+        note: 'If you made this change, there is nothing to do.',
+      },
+      brand,
+    );
   }
 
   // ---- THE ACCOUNT FLOWS ----
@@ -202,18 +212,23 @@ export function createAuthService(deps: AuthServiceDeps) {
       const passwordHash = await hashPassword(input.password);
 
       const alreadyRegistered = async () => {
-        sendInBackground({
-          to: emailAddress,
-          subject: 'Someone tried to create an SXM Rentals account with your email',
-          text: [
-            'Someone tried to create a new SXM Rentals account using this email address, which already has an account.',
-            '',
-            `If it was you, sign in here: ${config.appUrl}/sign-in`,
-            `Forgotten your password? ${config.appUrl}/forgot-password`,
-            '',
-            'If it was not you, you can ignore this email. Your account has not been changed.',
-          ].join('\n'),
-        });
+        sendInBackground(
+          buildEmail(
+            emailAddress,
+            'Someone tried to create an SXM Rentals account with your email',
+            {
+              preheader: 'Your account already exists — nothing has changed.',
+              title: 'You already have an account',
+              paragraphs: [
+                'Someone tried to create a new SXM Rentals account using this email address, which already has one.',
+                'If it was you, just sign in instead. If you have forgotten your password, you can reset it.',
+              ],
+              button: { label: 'Sign in', url: `${config.appUrl}/sign-in` },
+              note: `Forgotten your password? ${config.appUrl}/forgot-password — if this was not you, you can ignore this email. Your account has not been changed.`,
+            },
+            brand,
+          ),
+        );
       };
 
       if (await findAccountByEmail(emailAddress)) return alreadyRegistered();
@@ -338,20 +353,23 @@ export function createAuthService(deps: AuthServiceDeps) {
       const account = await findAccountByEmail(normalizeEmail(emailAddressInput));
       if (!account) return;
       const token = await db.transaction((tx) => issueLinkToken(tx, account.customer.id, 'reset_password'));
-      sendInBackground({
-        to: account.customer.email,
-        subject: 'Reset your SXM Rentals password',
-        text: [
-          `Hi ${account.customer.firstName},`,
-          '',
-          'Someone asked to reset the password for your SXM Rentals account. To choose a new one, open the link below. It works once and expires in 30 minutes.',
-          '',
-          `${config.appUrl}/reset-password?token=${token}`,
-          '',
-          'If you did not ask for this, you can ignore this email — your password has not been changed.',
-          'SXM Rentals will never ask for your password by email.',
-        ].join('\n'),
-      });
+      sendInBackground(
+        buildEmail(
+          account.customer.email,
+          'Reset your SXM Rentals password',
+          {
+            preheader: 'Choose a new password — the link expires in 30 minutes.',
+            title: 'Reset your password',
+            paragraphs: [
+              `Hi ${account.customer.firstName},`,
+              'Someone asked to reset the password for your SXM Rentals account. Choose a new one below.',
+            ],
+            button: { label: 'Choose a new password', url: `${config.appUrl}/reset-password?token=${token}` },
+            note: 'This link works once and expires in 30 minutes. If you did not ask for this, you can ignore this email — your password has not been changed.',
+          },
+          brand,
+        ),
+      );
     },
 
     // Choosing a new password from the emailed link. Signs out every device.

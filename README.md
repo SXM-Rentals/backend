@@ -57,6 +57,7 @@ no setup at all. Set `DATABASE_URL` to your own Neon branch to use the real thin
 | `npm run db:generate` | Writes a new SQL migration after you change `src/db/schema/` |
 | `npm run db:migrate` | Applies any migrations not yet applied |
 | `npm run admin:create` | Makes a staff account for the admin panel |
+| `npm run admin:reset` | The way back in: gives an account a new temporary password, switches it on, clears its lockout |
 | `npm run tasks:daily` | The once-a-day job: moves bookings on as dates pass, sends tomorrow's reminders, and prepares payouts |
 
 Node 20.11 or newer (CI and Render use the version in `.nvmrc`). Nothing is
@@ -85,6 +86,7 @@ readable list, if any are wrong — and production is stricter: it requires
 | `BREACHED_PASSWORD_CHECK` | `false` skips the leaked-password check (e.g. offline) |
 | `ENCRYPTION_KEY` | Encrypts staff two-factor secrets. **Required in production**; without it, staff sign-in refuses to work rather than storing one in plain text |
 | `ADMIN_IP_ALLOWLIST` | Addresses allowed to reach the admin panel. Empty means no address restriction |
+| `EMAIL_LOGO_URL` | The logo drawn at the top of every email. **Must load without signing in.** Defaults to the website's copy |
 | `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
 | `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
 | `CURRENCY` | What bookings are charged in (`usd`) |
@@ -272,6 +274,16 @@ Notifications are created by the backend when something happens — there is
 deliberately no address an app can call to make one. Push notifications to
 phones come later; they need Expo credentials.
 
+**Every email goes out twice over, in the same message:** a designed version
+with the SXM Rentals logo, and a plain-text version written to read properly on
+its own for mail programs that will not show the designed one. Both are built
+from the same content in `src/lib/email-templates.ts`, so they cannot drift
+apart. The markup there is deliberately old-fashioned — tables and inline
+styles — because mail programs are not browsers; tidying it into modern CSS
+will break it where people actually read email. **The logo is loaded from
+`EMAIL_LOGO_URL`, which has to be reachable without signing in**, or readers
+see the words "SXM Rentals" instead of the image.
+
 ---
 
 ## The admin panel
@@ -309,8 +321,8 @@ question to suit the chart. Money is counted by when a booking was *made*, a
 cancelled booking is counted but brings in nothing, and security deposits appear
 in no total anywhere — they are the customer's money being held.
 
-**Making the first staff account** (there is deliberately no web address that
-creates one — nobody can grant themselves access through the panel):
+**Making the first staff account** — the only one that has to be made from the
+server:
 
 ```bash
 npm run admin:create -- "Full Name" name@example.com "a long passphrase"
@@ -320,6 +332,36 @@ They then sign in, set up an authenticator app, and use a code from it every
 time after that. Set `ADMIN_IP_ALLOWLIST` to limit the panel to your office or
 VPN addresses as well; left empty, any address may reach it and the code is the
 only barrier.
+
+**Every staff account after that is managed from the panel**, with four guards
+that are the whole reason it is safe to do there rather than from the server:
+
+- **Every change to a staff account also needs the actor's own authenticator
+  code, fresh, in the request.** A session left open on an unlocked screen is
+  not enough to add an administrator, reset a colleague, or lock everyone out.
+- **A new or reset account must set its own password before it can do anything
+  else.** Until then every address except "who am I", "change my password" and
+  "sign out" answers `403 password_change_required`. Otherwise whoever created
+  the account could go on acting as them, and the audit log's "who did this"
+  would stop meaning one person.
+- **Nobody can switch off or reset their own account**, so the panel can never
+  lock out the last person able to put things right.
+- **Every one of those changes is in the audit log with the reason given**, and
+  no password, code or secret is ever written to the log, a response, or a log
+  line.
+
+Wrong passwords and wrong codes share one lockout: five in a row locks the
+account for up to ten minutes, and the answer carries a `Retry-After`.
+
+**When the panel cannot help** — every account switched off, or the only
+administrator has lost their phone:
+
+```bash
+npm run admin:reset -- name@example.com "a new temporary passphrase" [--authenticator]
+```
+
+It needs the live `DATABASE_URL`; without it, it quietly resets an account in
+the local database instead and says so.
 
 ---
 

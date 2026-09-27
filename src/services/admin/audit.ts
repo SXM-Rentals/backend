@@ -33,9 +33,23 @@ export type AuditAction =
   | 'promotion_changed'
   | 'settings_changed'
   | 'dispute_assigned'
-  | 'dispute_resolved';
+  | 'dispute_resolved'
+  // Staff accounts, managed from the panel rather than from the server.
+  | 'staff_created'
+  | 'staff_reset'
+  | 'staff_disabled'
+  | 'staff_enabled'
+  | 'password_changed';
 
-export type AuditSubjectType = 'customer' | 'provider' | 'vehicle' | 'booking' | 'payment' | 'platform';
+export type AuditSubjectType =
+  | 'customer'
+  | 'provider'
+  | 'vehicle'
+  | 'booking'
+  | 'payment'
+  | 'platform'
+  // A staff member's own account, acted on by another staff member.
+  | 'staff';
 
 export type AuditEntryInput = {
   staffId: string;

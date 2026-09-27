@@ -20,6 +20,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { bookings, customers, deposits, notifications, vehicles } from '../../db/schema/index.js';
 import type { EmailSender } from '../../lib/email.js';
+import { buildEmail, type EmailBrand, type EmailContent } from '../../lib/email-templates.js';
 import { notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
 import { today } from '../availability-engine/index.js';
@@ -30,6 +31,8 @@ export type NotificationServiceDeps = {
   db: Database;
   email: EmailSender;
   logger: Logger;
+  // The website address and logo the emails are drawn with.
+  brand: EmailBrand;
 };
 
 export type NotificationKind =
@@ -45,7 +48,7 @@ export type NotificationKind =
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 export function createNotificationService(deps: NotificationServiceDeps) {
-  const { db, email, logger } = deps;
+  const { db, email, logger, brand } = deps;
 
   // Everything the messages need to say something useful: who, which car, when.
   async function bookingContext(bookingId: string) {
@@ -67,8 +70,9 @@ export function createNotificationService(deps: NotificationServiceDeps) {
     kind: NotificationKind;
     title: string;
     body: string;
-    // Only set for the messages that genuinely warrant an email.
-    emailTo?: { address: string; subject: string; text: string } | undefined;
+    // Only set for the messages that genuinely warrant an email. The content is
+    // drawn by lib/email-templates.ts, so every email looks like SXM Rentals.
+    emailTo?: { address: string; subject: string; content: EmailContent } | undefined;
     // When set, the same kind of message about the same booking is only ever
     // sent once.
     onlyOnce?: boolean;
@@ -93,7 +97,7 @@ export function createNotificationService(deps: NotificationServiceDeps) {
 
       if (input.emailTo) {
         email
-          .send({ to: input.emailTo.address, subject: input.emailTo.subject, text: input.emailTo.text })
+          .send(buildEmail(input.emailTo.address, input.emailTo.subject, input.emailTo.content, brand))
           .catch((error: unknown) => logger.error({ err: error }, 'Notification email could not be sent'));
       }
     } catch (error) {
@@ -119,15 +123,18 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         emailTo: {
           address: row.customer.email,
           subject: `Your SXM Rentals booking ${row.booking.reference}`,
-          text: [
-            `Hi ${row.customer.firstName},`,
-            '',
-            `Your ${car} is booked from ${row.booking.startDate} to ${row.booking.endDate}.`,
-            `Collection: ${row.booking.pickupTime} at ${row.booking.location}.`,
-            '',
-            `Total for the rental: ${money(row.booking.totalDueTodayCents)}.`,
-            'A security deposit is held separately on your card just before collection and given back after the car is returned. It is not part of the total above.',
-          ].join('\n'),
+          content: {
+            preheader: `${car}, ${row.booking.startDate} to ${row.booking.endDate}.`,
+            title: 'Your booking is confirmed',
+            paragraphs: [
+              `Hi ${row.customer.firstName},`,
+              `Your ${car} is booked from ${row.booking.startDate} to ${row.booking.endDate}.`,
+              `Collection: ${row.booking.pickupTime} at ${row.booking.location}.`,
+              `Total for the rental: ${money(row.booking.totalDueTodayCents)}.`,
+            ],
+            button: { label: 'View my booking', url: `${brand.siteUrl}/account/rentals` },
+            note: 'A security deposit is held separately on your card just before collection and given back after the car is returned. It is not part of the total above.',
+          },
         },
       });
     },
@@ -144,12 +151,16 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         emailTo: {
           address: row.customer.email,
           subject: `Your SXM Rentals booking ${row.booking.reference} is cancelled`,
-          text: [
-            `Hi ${row.customer.firstName},`,
-            '',
-            `Your booking for the ${row.vehicle.make} ${row.vehicle.model} (${row.booking.startDate} to ${row.booking.endDate}) has been cancelled.`,
-            'Any deposit held for it is released back to your card.',
-          ].join('\n'),
+          content: {
+            preheader: 'Your booking has been cancelled and any deposit released.',
+            title: 'Your booking is cancelled',
+            paragraphs: [
+              `Hi ${row.customer.firstName},`,
+              `Your booking for the ${row.vehicle.make} ${row.vehicle.model} (${row.booking.startDate} to ${row.booking.endDate}) has been cancelled.`,
+            ],
+            button: { label: 'Find another car', url: `${brand.siteUrl}/search` },
+            note: 'Any deposit held for it is released back to your card. It was only ever held, never taken.',
+          },
         },
       });
     },
@@ -181,12 +192,16 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         emailTo: {
           address: row.customer.email,
           subject: `Payment problem with booking ${row.booking.reference}`,
-          text: [
-            `Hi ${row.customer.firstName},`,
-            '',
-            `The payment for your booking ${row.booking.reference} did not go through.`,
-            'Your booking is being held for now — please open the app and try another card.',
-          ].join('\n'),
+          content: {
+            preheader: 'Your card was declined — your booking is still being held.',
+            title: 'Payment did not go through',
+            paragraphs: [
+              `Hi ${row.customer.firstName},`,
+              `The payment for your booking ${row.booking.reference} was declined.`,
+              'Your booking is being held for now. Please try another card.',
+            ],
+            button: { label: 'Try another card', url: `${brand.siteUrl}/account/rentals` },
+          },
         },
       });
     },
@@ -214,12 +229,16 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         emailTo: {
           address: row.customer.email,
           subject: `Your deposit for ${row.booking.reference} has been released`,
-          text: [
-            `Hi ${row.customer.firstName},`,
-            '',
-            `The ${money(row.deposit.amountCents)} security deposit held for booking ${row.booking.reference} has been released.`,
-            'It was only ever held on your card, never taken. Your bank may take a few days to show it as available again.',
-          ].join('\n'),
+          content: {
+            preheader: `${money(row.deposit.amountCents)} released — it was never charged.`,
+            title: 'Your deposit has been released',
+            paragraphs: [
+              `Hi ${row.customer.firstName},`,
+              `The ${money(row.deposit.amountCents)} security deposit held for booking ${row.booking.reference} has been released.`,
+              'It was only ever held on your card, never taken.',
+            ],
+            note: 'Your bank may take a few days to show it as available again.',
+          },
         },
       });
     },
@@ -244,15 +263,17 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         emailTo: {
           address: row.customer.email,
           subject: `About the deposit for booking ${row.booking.reference}`,
-          text: [
-            `Hi ${row.customer.firstName},`,
-            '',
-            `${money(kept)} of the ${money(row.deposit.amountCents)} security deposit held for booking ${row.booking.reference} has been kept.`,
-            '',
-            `Reason given: ${row.deposit.claimReason ?? 'not recorded'}`,
-            '',
-            'Anything not kept is released back to your card. If you disagree with this, reply to this email and we will look into it.',
-          ].join('\n'),
+          content: {
+            preheader: `${money(kept)} of your deposit has been kept — here is why.`,
+            title: 'About your deposit',
+            paragraphs: [
+              `Hi ${row.customer.firstName},`,
+              `${money(kept)} of the ${money(row.deposit.amountCents)} security deposit held for booking ${row.booking.reference} has been kept.`,
+              `Reason given: ${row.deposit.claimReason ?? 'not recorded'}`,
+              'Anything not kept is released back to your card.',
+            ],
+            note: 'If you disagree with this, reply to this email and we will look into it.',
+          },
         },
       });
     },

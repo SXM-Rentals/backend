@@ -41,6 +41,7 @@ try {
     db: connection.db,
     email: config.isProduction ? createUnconfiguredEmailSender(console) : createConsoleEmailSender(console),
     logger: console,
+    brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl },
   });
   const reminders = await notifications.sendTomorrowsReminders();
   console.log(`Reminders: ${reminders.pickups} collecting tomorrow, ${reminders.returns} returning tomorrow.`);

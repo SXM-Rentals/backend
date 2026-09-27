@@ -17,7 +17,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Config } from '../config.js';
 import type { Database } from '../db/client.js';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 import type { Actor } from '../lib/ownership.js';
 import type { AdminActor, AdminAuthService } from '../services/admin/auth.js';
 import { authenticateSession } from '../services/auth/sessions.js';
@@ -109,11 +109,27 @@ export function requireCustomer(request: FastifyRequest): Actor {
 // Staff only, and only after a two-factor code. Where an address allowlist is
 // configured, the request must also come from one of those addresses — a
 // stolen password and phone are then still not enough from anywhere else.
-export function requireAdmin(request: FastifyRequest, config: Config): AdminActor {
+export function requireAdmin(
+  request: FastifyRequest,
+  config: Config,
+  // The three addresses a staff member can still use while they owe us a
+  // password of their own: looking at their own record, setting that password,
+  // and signing out.
+  options: { allowPendingPassword?: boolean } = {},
+): AdminActor {
   if (config.adminIpAllowlist.length > 0 && !config.adminIpAllowlist.includes(request.ip)) {
     throw forbidden('The admin panel cannot be reached from this address.');
   }
   if (!request.adminActor) throw unauthorized('Please sign in to the admin panel.');
+
+  // An account still carrying the temporary password it was given can do
+  // nothing else until it has one of its own — otherwise whoever created or
+  // reset it could go on acting as them, and the audit log's "who did this"
+  // would stop meaning one person.
+  if (request.adminActor.mustChangePassword && !options.allowPendingPassword) {
+    throw new AppError(403, 'password_change_required', 'Set your own password before carrying on.');
+  }
+
   return request.adminActor;
 }
 

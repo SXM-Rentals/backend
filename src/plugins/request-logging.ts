@@ -20,6 +20,9 @@ const REDACTED_PATHS = [
   '*.password',
   '*.currentPassword',
   '*.newPassword',
+  // Authenticator codes are short-lived, but they are still secrets in transit
+  // and do not belong in a log.
+  '*.code',
   '*.passwordHash',
   '*.token',
   '*.tokenHash',

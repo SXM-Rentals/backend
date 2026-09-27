@@ -39,6 +39,7 @@ import vehicleRoutes from './routes/vehicles/index.js';
 import webhookRoutes from './routes/webhooks/index.js';
 import { createAdminAuthService } from './services/admin/auth.js';
 import { createAdminService } from './services/admin/index.js';
+import { createAdminStaffService } from './services/admin/staff.js';
 import { createAuthService } from './services/auth/index.js';
 import { createNotificationService } from './services/notifications/index.js';
 import { createPaymentService } from './services/payments/index.js';
@@ -80,16 +81,19 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   await registerCors(app, config);
   await app.register(cookie);
   await registerRateLimit(app, db);
-  // Staff sign in through their own realm, checked on every request alongside
-  // the customer one — and never confused with it.
-  const adminAuth = createAdminAuthService({ db, config, logger: app.log });
-  registerAuth(app, { db, config, adminAuth });
-
-  // ---- SERVICES ----
+  // How emails go out, and how a password is checked against known breaches.
+  // Both are needed before sign-in is assembled, customer or staff.
   const email =
     deps.email ?? (config.isProduction ? createUnconfiguredEmailSender(app.log) : createConsoleEmailSender(app.log));
   const breachedPasswords =
     deps.breachedPasswords ?? (config.breachedPasswordCheck ? createHibpChecker(app.log) : skipBreachedPasswordCheck);
+
+  // Staff sign in through their own realm, checked on every request alongside
+  // the customer one — and never confused with it.
+  const adminAuth = createAdminAuthService({ db, config, logger: app.log, breachedPasswords });
+  registerAuth(app, { db, config, adminAuth });
+
+  // ---- SERVICES ----
   const auth = createAuthService({ db, config, email, breachedPasswords, logger: app.log });
 
   // Stripe, when its keys are set. Until then every payment endpoint answers
@@ -105,9 +109,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       : createUnconfiguredGateway());
   // Tells customers what has happened: in the app's notification list, and by
   // email for the things that warrant one.
-  const notifications = createNotificationService({ db, email, logger: app.log });
+  const notifications = createNotificationService({
+    db,
+    email,
+    logger: app.log,
+    brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl },
+  });
   const payments = createPaymentService({ db, gateway, logger: app.log, notifications });
   const admin = createAdminService({ db, gateway, payments });
+  // Staff accounts, managed from the panel. It borrows the sign-in service's
+  // lockout counters and session-ending, so there is one of each.
+  const staffAccounts = createAdminStaffService({ db, auth: adminAuth, breachedPasswords });
 
   // ---- ROUTES ----
   // Versioned, so a breaking change never strands an older phone-app release.
@@ -128,7 +140,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(paymentRoutes, { prefix: '/payments', payments });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway });
-      await api.register(adminRoutes, { prefix: '/admin', db, config, admin, adminAuth });
+      await api.register(adminRoutes, { prefix: '/admin', db, config, admin, adminAuth, staffAccounts });
       // Later phases register verification, rewards, notifications, ... here.
     },
     { prefix: '/api/v1' },

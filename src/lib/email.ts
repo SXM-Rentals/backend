@@ -13,7 +13,11 @@
 export type EmailMessage = {
   to: string;
   subject: string;
+  // The plain-text version, written to read properly on its own.
   text: string;
+  // The designed version. Mail programs that cannot show it fall back to the
+  // text above. Built by lib/email-templates.ts.
+  html?: string;
 };
 
 export type EmailSender = {
@@ -31,7 +35,12 @@ type Logger = {
 export function createConsoleEmailSender(logger: Logger): EmailSender {
   return {
     async send(message) {
-      logger.info({ email: message }, `Email (not sent, development mode): ${message.subject}`);
+      // Only the text version is printed: the designed one is hundreds of lines
+      // of markup and would bury the link you are trying to click.
+      logger.info(
+        { email: { to: message.to, subject: message.subject, text: message.text, designed: Boolean(message.html) } },
+        `Email (not sent, development mode): ${message.subject}`,
+      );
     },
   };
 }

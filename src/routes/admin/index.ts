@@ -31,6 +31,8 @@ import { AUTH_LIMITS } from '../../plugins/rate-limit.js';
 import type { AdminAuthService } from '../../services/admin/auth.js';
 import { listAudit } from '../../services/admin/audit.js';
 import type { AdminService } from '../../services/admin/index.js';
+import type { AdminStaffService } from '../../services/admin/staff.js';
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../lib/passwords.js';
 import type { Database } from '../../db/client.js';
 
 export type AdminRouteOptions = {
@@ -38,6 +40,7 @@ export type AdminRouteOptions = {
   config: Config;
   admin: AdminService;
   adminAuth: AdminAuthService;
+  staffAccounts: AdminStaffService;
 };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
@@ -61,6 +64,34 @@ const userPatchBody = z.object({
   reason,
 });
 const assignBody = z.object({ staffId: z.string().max(64), reason });
+
+// Every change to a staff account also needs the actor's own authenticator
+// code, checked fresh — a session left open is not enough on its own.
+const code = z.string().trim().min(6).max(10);
+const newStaffPassword = z
+  .string()
+  .min(PASSWORD_MIN_LENGTH, `Passwords need at least ${PASSWORD_MIN_LENGTH} characters.`)
+  .max(PASSWORD_MAX_LENGTH, `Passwords can be at most ${PASSWORD_MAX_LENGTH} characters.`);
+
+const staffCreateBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().pipe(z.email().max(254)),
+  password: newStaffPassword,
+  reason,
+  code,
+});
+const staffResetBody = z.object({
+  password: newStaffPassword,
+  resetAuthenticator: z.boolean().optional(),
+  reason,
+  code,
+});
+const reasonAndCodeBody = z.object({ reason, code });
+const ownPasswordBody = z.object({
+  currentPassword: z.string().min(1).max(PASSWORD_MAX_LENGTH),
+  newPassword: newStaffPassword,
+});
+const staffListQuery = z.object({ status: z.enum(['active', 'disabled', 'all']).default('active') });
 const analyticsQuery = z.object({
   months: z.coerce.number().int().min(1).max(60).optional(),
   from: z.iso.date().optional(),
@@ -75,7 +106,7 @@ const listQuery = z.object({
 });
 
 export default async function adminRoutes(app: FastifyInstance, options: AdminRouteOptions) {
-  const { db, config, admin, adminAuth } = options;
+  const { db, config, admin, adminAuth, staffAccounts } = options;
   const cookieName = adminSessionCookieName(config);
 
   // Staff sessions live in a cookie page scripts cannot read, like customers',
@@ -119,9 +150,25 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   });
 
   app.post('/auth/mfa/verify', { config: { rateLimit: AUTH_LIMITS.login } }, async (request) => {
-    const { code } = parseInput(mfaBody, request.body);
-    const result = await adminAuth.confirmMfa(pendingToken(request), code);
-    return { staff: result.staff, expiresAt: result.expiresAt.toISOString() };
+    const body = parseInput(mfaBody, request.body);
+    const result = await adminAuth.confirmMfa(pendingToken(request), body.code);
+    return {
+      staff: result.staff,
+      // True while this account still has the temporary password it was given:
+      // the panel shows "set your own password" before anything else.
+      mustChangePassword: result.mustChangePassword,
+      expiresAt: result.expiresAt.toISOString(),
+    };
+  });
+
+  // ---- CHANGING YOUR OWN PASSWORD ----
+  // Allowed while the account still owes us a password of its own — that is the
+  // whole point of it.
+  app.post('/auth/password', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request, reply) => {
+    const actor = requireAdmin(request, config, { allowPendingPassword: true });
+    const body = parseInput(ownPasswordBody, request.body);
+    await adminAuth.changeOwnPassword(actor, body);
+    return reply.status(204).send();
   });
 
   app.post('/auth/logout', async (request, reply) => {
@@ -130,9 +177,17 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     return reply.status(204).send();
   });
 
+  // Readable even while the account still owes us a password, so the panel can
+  // tell who is signed in and show the "set your own password" screen.
   app.get('/me', async (request) => {
-    const actor = staff(request);
-    return { id: actor.staffId, name: actor.name, email: actor.email };
+    const actor = requireAdmin(request, config, { allowPendingPassword: true });
+    return {
+      id: actor.staffId,
+      name: actor.name,
+      email: actor.email,
+      avatarInitials: actor.avatarInitials,
+      mustChangePassword: actor.mustChangePassword,
+    };
   });
 
   // ================= THE DASHBOARD =================
@@ -153,9 +208,45 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     return listAudit(db, { limit: query.limit ?? 100 });
   });
 
+  // ---- STAFF ACCOUNTS ----
+  // Reading the list is an ordinary staff action. Every CHANGE below also needs
+  // the actor's own authenticator code, checked fresh in the request.
   app.get('/staff', async (request) => {
     staff(request);
-    return admin.listStaff();
+    const { status } = parseInput(staffListQuery, request.query);
+    return staffAccounts.list(status);
+  });
+
+  app.post('/staff', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request, reply) => {
+    const actor = staff(request);
+    const body = parseInput(staffCreateBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    const created = await staffAccounts.create(actor, body);
+    return reply.status(201).send(created);
+  });
+
+  app.post('/staff/:id/reset', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(staffResetBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return staffAccounts.reset(actor, id, body);
+  });
+
+  app.post('/staff/:id/disable', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(reasonAndCodeBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return staffAccounts.disable(actor, id, body);
+  });
+
+  app.post('/staff/:id/enable', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(reasonAndCodeBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return staffAccounts.enable(actor, id, body);
   });
 
   // ---- ANALYTICS ----

@@ -49,6 +49,16 @@ export function registerErrorHandler(app: FastifyInstance): void {
     // Failures the backend raised on purpose.
     if (error instanceof AppError) {
       if (error.statusCode >= 500) request.log.error({ err: error }, 'Application error');
+
+      // "Wait and try again" always says how long, in the header apps and
+      // browsers already know how to read — not only in the body. The rate
+      // limiter sets this itself; this covers the lockouts raised in code,
+      // like too many wrong passwords or authenticator codes.
+      const retryAfter = (error.details as { retryAfterSeconds?: number } | undefined)?.retryAfterSeconds;
+      if (error.statusCode === 429 && retryAfter && !reply.hasHeader('retry-after')) {
+        reply.header('retry-after', Math.max(1, Math.ceil(retryAfter)));
+      }
+
       return sendError(request, reply, error.statusCode, error.code, error.message, error.details);
     }
 
