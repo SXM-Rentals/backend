@@ -87,6 +87,9 @@ readable list, if any are wrong — and production is stricter: it requires
 | `ENCRYPTION_KEY` | Encrypts staff two-factor secrets. **Required in production**; without it, staff sign-in refuses to work rather than storing one in plain text |
 | `ADMIN_IP_ALLOWLIST` | Addresses allowed to reach the admin panel. Empty means no address restriction |
 | `EMAIL_LOGO_URL` | The logo drawn at the top of every email. **Must load without signing in.** Defaults to the website's copy |
+| `RESEND_API_KEY` | Resend, which delivers the email. Empty in development = printed to the terminal; empty in production = not sent, and logged loudly |
+| `EMAIL_FROM` | Who emails come from. Resend's test address until a domain is verified, and then only to your own inbox |
+| `EMAIL_REPLY_TO` | Where replies go, if that should differ from the sender |
 | `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
 | `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
 | `CURRENCY` | What bookings are charged in (`usd`) |
@@ -438,10 +441,13 @@ phone's secure storage and send back as `Authorization: Bearer <code>`.
 `requestId` matches the server's log line. An unexpected failure never reveals
 anything about why.
 
-**Emails are not really sent yet.** In development they are printed to the
-terminal, so you can click the link. In production, with no provider connected,
-they are refused and logged (without their contents). Resend or Postmark plugs
-into `src/lib/email.ts`.
+**Emails are delivered by Resend**, as soon as `RESEND_API_KEY` is set. With no
+key, development prints each email to the terminal so you can click the link in
+it, and production refuses to send and says so in the logs (without the email's
+contents) — it never quietly drops one. Resend answers a refusal — an unverified
+domain, a wrong key — in its reply rather than by failing outright, so
+`src/lib/email.ts` checks for that and raises it; otherwise the customer would
+be told to check an inbox nothing was sent to.
 
 ---
 

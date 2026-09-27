@@ -18,7 +18,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { Config } from './config.js';
 import type { Database } from './db/client.js';
-import { createConsoleEmailSender, createUnconfiguredEmailSender, type EmailSender } from './lib/email.js';
+import {
+  createConsoleEmailSender,
+  createResendEmailSender,
+  createUnconfiguredEmailSender,
+  type EmailSender,
+} from './lib/email.js';
 import { createHibpChecker, skipBreachedPasswordCheck, type BreachedPasswordChecker } from './lib/passwords.js';
 import { registerAuth } from './middleware/auth.js';
 import { registerErrorHandler } from './middleware/error-handler.js';
@@ -83,8 +88,20 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   await registerRateLimit(app, db);
   // How emails go out, and how a password is checked against known breaches.
   // Both are needed before sign-in is assembled, customer or staff.
+  // Resend as soon as its key is set; otherwise printed to the terminal in
+  // development, and refused loudly in production rather than sent nowhere.
   const email =
-    deps.email ?? (config.isProduction ? createUnconfiguredEmailSender(app.log) : createConsoleEmailSender(app.log));
+    deps.email ??
+    (config.resendApiKey
+      ? createResendEmailSender({
+          apiKey: config.resendApiKey,
+          from: config.emailFrom,
+          replyTo: config.emailReplyTo,
+          logger: app.log,
+        })
+      : config.isProduction
+        ? createUnconfiguredEmailSender(app.log)
+        : createConsoleEmailSender(app.log));
   const breachedPasswords =
     deps.breachedPasswords ?? (config.breachedPasswordCheck ? createHibpChecker(app.log) : skipBreachedPasswordCheck);
 

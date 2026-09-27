@@ -31,6 +31,14 @@ const envSchema = z
     // mail programs show the alt text instead. Defaults to the website's own
     // copy; set this when the website is not public yet.
     EMAIL_LOGO_URL: z.string().min(1).optional(),
+    // Resend. With no key, emails are printed to the terminal in development
+    // and refused in production — never sent quietly into a void.
+    RESEND_API_KEY: z.string().min(1).optional(),
+    // Who emails appear to come from. Until a domain is verified with Resend,
+    // its test address is the only one allowed, and only to your own inbox.
+    EMAIL_FROM: z.string().min(3).default('SXM Rentals <onboarding@resend.dev>'),
+    // Where a reply goes, if that should differ from the sender.
+    EMAIL_REPLY_TO: z.string().min(3).optional(),
     // Stripe. Until these are set, the payment and deposit endpoints answer
     // "not switched on yet" rather than pretending to take money.
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
@@ -77,6 +85,9 @@ export type Config = {
   breachedPasswordCheck: boolean;
   // Full address of the logo drawn at the top of every email.
   emailLogoUrl: string;
+  resendApiKey: string | undefined;
+  emailFrom: string;
+  emailReplyTo: string | undefined;
   encryptionKey: string | undefined;
   adminIpAllowlist: string[];
   stripeSecretKey: string | undefined;
@@ -122,6 +133,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     appUrl,
     breachedPasswordCheck: env.BREACHED_PASSWORD_CHECK === 'true',
     emailLogoUrl: env.EMAIL_LOGO_URL ?? `${appUrl}/brand/logo-white.png`,
+    resendApiKey: env.RESEND_API_KEY,
+    emailFrom: env.EMAIL_FROM,
+    emailReplyTo: env.EMAIL_REPLY_TO,
     encryptionKey: env.ENCRYPTION_KEY,
     adminIpAllowlist: splitList(env.ADMIN_IP_ALLOWLIST),
     stripeSecretKey: env.STRIPE_SECRET_KEY,

@@ -1,13 +1,18 @@
 // SXM Rentals — Created by Giordano Bertin-Maurice
 // Copyright (c) 2026 Giordano Bertin-Maurice. All rights reserved.
-// WHAT THIS FILE DOES: The one doorway the backend uses to send an email
-// (account verification links, password resets, and later booking
-// confirmations and receipts). No real email provider is connected yet, so
-// there are three stand-ins: on a developer's laptop the email is printed to
-// the terminal so the link can be clicked; in tests it is kept in a list the
-// test can read; and in production it is refused loudly rather than silently
-// printing someone's password-reset link into the server logs. Resend or
-// Postmark plugs in here later without any other file changing.
+// WHAT THIS FILE DOES: The one doorway the backend uses to send an email —
+// confirmation links, password resets, booking confirmations, deposit news.
+//
+// There are four ways of sending, and which one is used is decided in app.ts:
+//   - RESEND, the real one, used as soon as RESEND_API_KEY is set;
+//   - on a developer's laptop with no key, the email is printed to the terminal
+//     so the link in it can be clicked;
+//   - in tests it is kept in a list the test can read;
+//   - in production with no key it is refused loudly, rather than silently
+//     printing somebody's password-reset link into the server logs.
+//
+// Whichever is used, the message itself is drawn by lib/email-templates.ts, so
+// every email looks the same wherever it was sent from.
 
 // ---- WHAT AN EMAIL IS ----
 export type EmailMessage = {
@@ -55,6 +60,69 @@ export function createMemoryEmailSender(): MemoryEmailSender {
     sent,
     async send(message) {
       sent.push(message);
+    },
+  };
+}
+
+// ---- THE REAL ONE: RESEND ----
+// Only the small part of Resend we use, written out here so a test can hand in
+// a stand-in and nothing has to reach the internet.
+export type ResendLike = {
+  emails: {
+    send(payload: {
+      from: string;
+      to: string;
+      subject: string;
+      text: string;
+      html?: string;
+      replyTo?: string;
+    }): Promise<{ data: { id: string } | null; error: { message: string; name?: string } | null }>;
+  };
+};
+
+export type ResendOptions = {
+  apiKey: string;
+  // Who the email appears to come from, e.g. "SXM Rentals <bookings@sxmrentals.com>".
+  from: string;
+  // Where a reply goes, when that should differ from the sender.
+  replyTo?: string | undefined;
+  logger: Logger;
+  // Only for tests.
+  client?: ResendLike;
+};
+
+export function createResendEmailSender(options: ResendOptions): EmailSender {
+  // Built lazily so importing this file never needs the key.
+  let client = options.client;
+
+  return {
+    async send(message) {
+      if (!client) {
+        const { Resend } = await import('resend');
+        client = new Resend(options.apiKey) as unknown as ResendLike;
+      }
+
+      const { data, error } = await client.emails.send({
+        from: options.from,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+        ...(message.html ? { html: message.html } : {}),
+        ...(options.replyTo ? { replyTo: options.replyTo } : {}),
+      });
+
+      // Resend reports a refusal in the answer rather than by throwing, so an
+      // unchecked call would look like it worked. The address is logged, the
+      // contents never are.
+      if (error) {
+        options.logger.error(
+          { to: message.to, subject: message.subject, reason: error.message },
+          'Email was refused by Resend',
+        );
+        throw new Error(`Email could not be sent: ${error.message}`);
+      }
+
+      options.logger.info({ to: message.to, subject: message.subject, id: data?.id }, 'Email sent');
     },
   };
 }
