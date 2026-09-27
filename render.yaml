@@ -86,6 +86,14 @@ services:
       # EMAIL_REPLY_TO: where replies go, if that should differ from the sender.
       - key: EMAIL_REPLY_TO
         sync: false
+      # The social accounts in every email's footer. Each stays plain words
+      # until its address is set here, so no email ever carries a dead link.
+      - key: SOCIAL_TIKTOK_URL
+        sync: false
+      - key: SOCIAL_INSTAGRAM_URL
+        sync: false
+      - key: SOCIAL_FACEBOOK_URL
+        sync: false
       # EMAIL_LOGO_URL: the logo drawn at the top of every email. It must load
       # WITHOUT signing in, so it cannot point at a Vercel site that still has
       # deployment protection switched on — readers would see the words

@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createResendEmailSender, createUnconfiguredEmailSender, type ResendLike } from '../src/lib/email.js';
+import { renderHtml, renderText } from '../src/lib/email-templates.js';
 
 // A stand-in for Resend: remembers what it was asked to send, and can be told
 // to refuse, exactly as the real one does when a key or domain is wrong.
@@ -122,5 +123,72 @@ describe('sending email with no provider connected', () => {
     const failure = logger.lines.find((line) => line.level === 'error');
     expect(failure?.msg).toContain('No email provider is configured');
     expect(JSON.stringify(logger.lines)).not.toContain('secret/reset');
+  });
+});
+
+describe('what every email says at the bottom', () => {
+  const brand = {
+    siteUrl: 'https://www.sxmrentals.app',
+    logoUrl: 'https://www.sxmrentals.app/brand/logo-white.png',
+    social: [
+      { name: 'TikTok', url: undefined },
+      { name: 'Instagram', url: undefined },
+      { name: 'Facebook', url: undefined },
+    ],
+  };
+  const content = {
+    preheader: 'One click and you are done.',
+    title: 'Confirm your email address',
+    paragraphs: ['Please confirm.'],
+  };
+
+  it('names the three accounts as plain words while they have no address', () => {
+    const html = renderHtml(content, brand);
+    const text = renderText(content, brand);
+
+    // Present in both versions, in the order asked for.
+    expect(html).toContain('TikTok');
+    expect(html.indexOf('TikTok')).toBeLessThan(html.indexOf('Instagram'));
+    expect(html.indexOf('Instagram')).toBeLessThan(html.indexOf('Facebook'));
+    expect(text).toContain('TikTok · Instagram · Facebook');
+    // And no link, because there is nowhere for it to go yet.
+    expect(html).not.toContain('>TikTok</a>');
+  });
+
+  it('turns each one into a link as soon as its address is set', () => {
+    const withAccounts = {
+      ...brand,
+      social: [
+        { name: 'TikTok', url: 'https://www.tiktok.com/@sxmrentals' },
+        { name: 'Instagram', url: undefined },
+        { name: 'Facebook', url: 'https://www.facebook.com/sxmrentals' },
+      ],
+    };
+
+    const html = renderHtml(content, withAccounts);
+    expect(html).toContain('href="https://www.tiktok.com/@sxmrentals"');
+    expect(html).toContain('href="https://www.facebook.com/sxmrentals"');
+    // The one still unopened stays plain rather than becoming a dead link.
+    expect(html).not.toContain('>Instagram</a>');
+
+    // The plain-text version carries the addresses, since a name cannot be
+    // clicked there.
+    expect(renderText(content, withAccounts)).toContain('TikTok: https://www.tiktok.com/@sxmrentals');
+  });
+
+  it('says what SXM Rentals does, and what it will never ask for', () => {
+    for (const rendered of [renderHtml(content, brand), renderText(content, brand)]) {
+      expect(rendered).toContain('Rent a vehicle across Sint Maarten and Saint-Martin');
+      expect(rendered).toContain('SXM Rentals will never ask you for your password.');
+      // The wording these replaced, in case either creeps back.
+      expect(rendered).not.toContain('Car rental across');
+      expect(rendered).not.toContain('by email.');
+    }
+  });
+
+  it('leaves the line out entirely when there are no accounts', () => {
+    const html = renderHtml(content, { siteUrl: brand.siteUrl, logoUrl: brand.logoUrl });
+    expect(html).not.toContain('TikTok');
+    expect(html).toContain('Rent a vehicle across Sint Maarten and Saint-Martin');
   });
 });

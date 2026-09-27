@@ -33,12 +33,25 @@ export type EmailContent = {
   note?: string;
 };
 
+export type SocialAccount = {
+  // What the reader sees: TikTok, Instagram, Facebook.
+  name: string;
+  // Its address, once the account exists. Empty means "not opened yet", and
+  // the name is then shown as plain words instead of a link. A social link
+  // that goes nowhere reads as a broken website rather than an unopened
+  // account, and that impression sticks — the website's lib/social.ts makes
+  // the same choice, for the same reason.
+  url: string | undefined;
+};
+
 export type EmailBrand = {
   // Where the website lives, used for the footer link and the logo.
   siteUrl: string;
   // Full address of the logo image. It must be reachable WITHOUT signing in,
   // or mail programs will show the alt text instead.
   logoUrl: string;
+  // Shown in the footer, in this order. Left out entirely when there are none.
+  social?: SocialAccount[];
 };
 
 // The palette, matching the apps' dark theme.
@@ -75,12 +88,24 @@ export function renderText(content: EmailContent, brand: EmailBrand): string {
   const lines = [...content.paragraphs];
   if (content.button) lines.push('', `${content.button.label}:`, content.button.url);
   if (content.note) lines.push('', content.note);
+  lines.push('', '—', 'SXM Rentals');
+  // The accounts, with their addresses where they exist — a name on its own is
+  // no use to somebody reading this as plain text, but it is honest.
+  const social = brand.social ?? [];
+  if (social.length > 0) {
+    // Once the accounts exist, each goes on its own line with its address,
+    // because nobody can click a name in a plain-text email. Until then the
+    // three names sit together on one line.
+    lines.push(
+      ...(social.some((account) => account.url)
+        ? social.map((account) => (account.url ? `${account.name}: ${account.url}` : account.name))
+        : [social.map((account) => account.name).join(' · ')]),
+    );
+  }
   lines.push(
-    '',
-    '—',
-    'SXM Rentals — car rental across Sint Maarten and Saint-Martin',
+    'Rent a vehicle across Sint Maarten and Saint-Martin',
     brand.siteUrl,
-    'SXM Rentals will never ask for your password by email.',
+    'SXM Rentals will never ask you for your password.',
   );
   return lines.join('\n');
 }
@@ -121,6 +146,25 @@ export function renderHtml(content: EmailContent, brand: EmailBrand): string {
         content.note,
       )}</p>`
     : '';
+
+  // The social accounts, on their own line in the footer. Each name becomes a
+  // link once its address is set, and stays plain words until then — there is
+  // no way to explain a dead link inside an email, so there are none.
+  const social = brand.social ?? [];
+  const socialRow =
+    social.length > 0
+      ? social
+          .map((account) =>
+            account.url
+              ? `<a href="${escapeHtml(account.url)}" style="color:${COLOURS.brand};text-decoration:none;">${escapeHtml(
+                  account.name,
+                )}</a>`
+              : escapeHtml(account.name),
+          )
+          // The dot inherits the footer's colour rather than being dimmed any
+          // further: on this background a fainter one is all but invisible.
+          .join(' · ') + '<br />'
+      : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -174,7 +218,8 @@ export function renderHtml(content: EmailContent, brand: EmailBrand): string {
                 <div style="border-top:1px solid ${COLOURS.border};padding-top:20px;">
                   <p style="margin:0 0 8px;font-family:${FONT};font-size:13px;line-height:1.6;color:${COLOURS.faint};">
                     <strong style="color:${COLOURS.body};">SXM Rentals</strong><br />
-                    Car rental across Sint Maarten and Saint-Martin
+                    ${socialRow}
+                    Rent a vehicle across Sint Maarten and Saint-Martin
                   </p>
                   <p style="margin:0 0 8px;font-family:${FONT};font-size:13px;line-height:1.6;">
                     <a href="${escapeHtml(brand.siteUrl)}" style="color:${COLOURS.brand};text-decoration:none;">
@@ -182,7 +227,7 @@ export function renderHtml(content: EmailContent, brand: EmailBrand): string {
                     </a>
                   </p>
                   <p style="margin:0;font-family:${FONT};font-size:12px;line-height:1.6;color:${COLOURS.faint};">
-                    SXM Rentals will never ask for your password by email.<br />
+                    SXM Rentals will never ask you for your password.<br />
                     © 2026 SXM Rentals
                   </p>
                 </div>

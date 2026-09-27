@@ -93,7 +93,7 @@ export function createAuthService(deps: AuthServiceDeps) {
   const { db, config, email, breachedPasswords, logger } = deps;
 
   // The logo and website address every email is drawn with.
-  const brand = { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl };
+  const brand = { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl, social: config.socialAccounts };
 
   // ---- SMALL HELPERS ----
 

@@ -90,6 +90,7 @@ readable list, if any are wrong — and production is stricter: it requires
 | `RESEND_API_KEY` | Resend, which delivers the email. Empty in development = printed to the terminal; empty in production = not sent, and logged loudly |
 | `EMAIL_FROM` | Who emails come from. Resend's test address until a domain is verified, and then only to your own inbox |
 | `EMAIL_REPLY_TO` | Where replies go, if that should differ from the sender |
+| `SOCIAL_TIKTOK_URL` `SOCIAL_INSTAGRAM_URL` `SOCIAL_FACEBOOK_URL` | The accounts in every email's footer. Empty = the name is shown as plain words, never as a dead link |
 | `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
 | `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
 | `CURRENCY` | What bookings are charged in (`usd`) |

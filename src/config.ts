@@ -39,6 +39,12 @@ const envSchema = z
     EMAIL_FROM: z.string().min(3).default('SXM Rentals <onboarding@resend.dev>'),
     // Where a reply goes, if that should differ from the sender.
     EMAIL_REPLY_TO: z.string().min(3).optional(),
+    // The social accounts, shown in every email's footer. Each is left out
+    // until its account actually exists: the name is then plain words rather
+    // than a link that goes nowhere, which reads as a broken website.
+    SOCIAL_TIKTOK_URL: z.string().min(1).optional(),
+    SOCIAL_INSTAGRAM_URL: z.string().min(1).optional(),
+    SOCIAL_FACEBOOK_URL: z.string().min(1).optional(),
     // Stripe. Until these are set, the payment and deposit endpoints answer
     // "not switched on yet" rather than pretending to take money.
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
@@ -88,6 +94,8 @@ export type Config = {
   resendApiKey: string | undefined;
   emailFrom: string;
   emailReplyTo: string | undefined;
+  // TikTok, Instagram, Facebook, in the order they are shown.
+  socialAccounts: { name: string; url: string | undefined }[];
   encryptionKey: string | undefined;
   adminIpAllowlist: string[];
   stripeSecretKey: string | undefined;
@@ -136,6 +144,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     resendApiKey: env.RESEND_API_KEY,
     emailFrom: env.EMAIL_FROM,
     emailReplyTo: env.EMAIL_REPLY_TO,
+    socialAccounts: [
+      { name: 'TikTok', url: env.SOCIAL_TIKTOK_URL },
+      { name: 'Instagram', url: env.SOCIAL_INSTAGRAM_URL },
+      { name: 'Facebook', url: env.SOCIAL_FACEBOOK_URL },
+    ],
     encryptionKey: env.ENCRYPTION_KEY,
     adminIpAllowlist: splitList(env.ADMIN_IP_ALLOWLIST),
     stripeSecretKey: env.STRIPE_SECRET_KEY,

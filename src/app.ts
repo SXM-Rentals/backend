@@ -130,7 +130,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     db,
     email,
     logger: app.log,
-    brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl },
+    brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl, social: config.socialAccounts },
   });
   const payments = createPaymentService({ db, gateway, logger: app.log, notifications });
   const admin = createAdminService({ db, gateway, payments });
