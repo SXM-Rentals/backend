@@ -55,6 +55,7 @@ no setup at all. Set `DATABASE_URL` to your own Neon branch to use the real thin
 | `npm test` | The test suite, once (each test file gets its own fresh database) |
 | `npm run test:watch` | The test suite, re-running as files change |
 | `npm run db:generate` | Writes a new SQL migration after you change `src/db/schema/` |
+| `npm run db:seed` | Fills an empty DEVELOPMENT database with approved businesses and cars |
 | `npm run db:migrate` | Applies any migrations not yet applied |
 | `npm run admin:create` | Makes a staff account for the admin panel |
 | `npm run admin:reset` | The way back in: gives an account a new temporary password, switches it on, clears its lockout |

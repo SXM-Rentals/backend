@@ -30,6 +30,7 @@ import {
   providerMembers,
   providers,
 } from '../../db/schema/index.js';
+import { anonymisedCustomer } from '../../lib/anonymise.js';
 import { generateToken, hashToken } from '../../lib/crypto.js';
 import type { EmailMessage, EmailSender } from '../../lib/email.js';
 import { buildEmail } from '../../lib/email-templates.js';
@@ -534,8 +535,21 @@ export function createAuthService(deps: AuthServiceDeps) {
       // The row stays and is marked closed rather than deleted: past bookings,
       // payouts to businesses and the audit trail all point at it, and sign-in,
       // sessions and "my account" already refuse a closed one.
+      //
+      // BUT MOST OF THE PERSON GOES WITH IT. The phone number is erased, the
+      // surname comes down to an initial — the same name a rental business was
+      // ever shown — and the email address is replaced, which FREES IT: it is
+      // unique across open and closed accounts alike, so leaving it meant the
+      // same person could never sign up again. See lib/anonymise.ts for what
+      // stays and why.
       await db.transaction(async (tx) => {
-        await tx.update(customers).set({ deletedAt: new Date() }).where(eq(customers.id, actor.customerId));
+        await tx
+          .update(customers)
+          .set({
+            deletedAt: new Date(),
+            ...anonymisedCustomer({ id: actor.customerId, lastName: account.customer.lastName }),
+          })
+          .where(eq(customers.id, actor.customerId));
         await tx.delete(providerMembers).where(eq(providerMembers.customerId, actor.customerId));
         await revokeAllSessions(tx, actor.customerId);
       });

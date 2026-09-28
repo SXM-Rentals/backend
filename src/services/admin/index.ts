@@ -50,6 +50,7 @@ import {
 import { buildMonthlySeries, buildSeries } from './analytics.js';
 import type { AdminActor } from './auth.js';
 import { recordAudit } from './audit.js';
+import { anonymisedCustomer } from '../../lib/anonymise.js';
 import { closeBusiness, reopenBusiness } from '../provider/index.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -443,7 +444,15 @@ export function createAdminService(deps: AdminServiceDeps) {
         throw conflict('has_held_deposit', 'A deposit is still being held for this account. It cannot be closed yet.');
       }
 
-      await db.update(customers).set({ deletedAt: new Date() }).where(eq(customers.id, customer.id));
+      // The same anonymising as when somebody closes their own account: the
+      // phone number goes, the surname comes down to an initial, and the email
+      // address is freed so the person can sign up again. Closing from the panel
+      // and closing from the app must leave the same thing behind, or which door
+      // was used decides what is kept.
+      await db
+        .update(customers)
+        .set({ deletedAt: new Date(), ...anonymisedCustomer({ id: customer.id, lastName: customer.lastName }) })
+        .where(eq(customers.id, customer.id));
       await recordAudit(db, {
         staffId: actor.staffId,
         action: 'account_deleted',

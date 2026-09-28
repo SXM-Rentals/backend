@@ -23,6 +23,10 @@ npm-debug.log*
 
 # The embedded development database created when DATABASE_URL is not set.
 .data/
+# Any copy set aside while sorting out a local database — PGlite refuses to open
+# one written by an older version of itself, and moving it aside is how you get
+# a working one back without losing the old files.
+.data-*/
 
 # Handoff notes written for the other chats. They live in Downloads, not here:
 # a repository is for the code, and these change every time somebody reads one.
