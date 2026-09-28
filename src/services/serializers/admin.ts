@@ -104,6 +104,17 @@ export function toAdminProvider(
     vehicleCount: extras.vehicleCount,
     bookingCount: extras.bookingCount,
     grossVolume: toAmount(extras.grossVolumeCents),
+    // WHEN IT CLOSED, OR null. A business can close itself, and until this field
+    // existed the panel could not tell: one that closed last week still appeared
+    // as an ordinary open business, verification badge intact, with a fleet of
+    // cars all suspended and no reason anywhere for why. A staff member would
+    // ring them to ask what had happened to their listings.
+    //
+    // Always present rather than left out when open, and called "closed" rather
+    // than "deleted", because nothing is deleted — the row stays for past
+    // bookings and payouts to point at. (The customer shape says `deletedAt` and
+    // omits it; the panel's screens already read that one, so it is left alone.)
+    closedAt: provider.deletedAt?.toISOString() ?? null,
   };
 }
 

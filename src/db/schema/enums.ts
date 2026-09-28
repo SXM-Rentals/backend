@@ -99,6 +99,10 @@ export const auditAction = pgEnum('audit_action', [
   'staff_disabled',
   'staff_enabled',
   'password_changed',
+  // A rental business, acted on by staff rather than by its own owner.
+  'business_closed',
+  'business_reopened',
+  'business_updated',
 ]);
 export const auditSubjectType = pgEnum('audit_subject_type', [
   'customer',

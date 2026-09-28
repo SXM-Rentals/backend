@@ -87,6 +87,30 @@ const staffResetBody = z.object({
   code,
 });
 const reasonAndCodeBody = z.object({ reason, code });
+// Correcting a business, one field at a time. A discriminated union rather than
+// "a string or a boolean": a wrong pairing is then refused here with a message
+// naming the field, instead of reaching Postgres and failing as a driver error.
+const providerPatchBody = z.discriminatedUnion('field', [
+  z.object({
+    field: z.enum([
+      'businessName',
+      'town',
+      'description',
+      'phone',
+      'respondsIn',
+      'legalName',
+      'contactEmail',
+      'website',
+      'registrationNumber',
+      'ownerName',
+      'ownerPhone',
+    ]),
+    value: z.string().trim().max(500),
+    reason,
+  }),
+  z.object({ field: z.literal('side'), value: z.enum(['dutch', 'french']), reason }),
+  z.object({ field: z.enum(['deliversVehicles', 'airportPickup']), value: z.boolean(), reason }),
+]);
 const ownPasswordBody = z.object({
   currentPassword: z.string().min(1).max(PASSWORD_MAX_LENGTH),
   newPassword: newStaffPassword,
@@ -307,6 +331,34 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   app.get('/providers/:id', async (request) => {
     staff(request);
     return admin.getProvider(parseInput(idParam, request.params).id);
+  });
+
+  // Closing a business, and opening it again. Both ask for the staff member's
+  // authenticator code as well as a reason: this delists a whole fleet and takes
+  // a business page down, so a session left open is not enough on its own.
+  app.post('/providers/:id/close', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(reasonAndCodeBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return admin.closeProvider(actor, id, body);
+  });
+
+  app.post('/providers/:id/reopen', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(reasonAndCodeBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return admin.reopenProvider(actor, id, body);
+  });
+
+  // Correcting one detail. No code: this is a typo fix, the same as a customer's
+  // record, and it still carries a reason and an audit entry.
+  app.patch('/providers/:id', async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(providerPatchBody, request.body);
+    return admin.updateProviderField(actor, id, body);
   });
 
   app.post('/providers/:id/verification', async (request) => {

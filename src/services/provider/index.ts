@@ -632,7 +632,14 @@ export async function getPayoutAccount(db: Database, gateway: PaymentGateway, pr
 //
 // It does not close the owner's own customer account — they may still rent a
 // car themselves.
-export async function closeBusiness(db: Database, providerId: string) {
+export async function closeBusiness(
+  db: Database,
+  providerId: string,
+  // Who will read the refusal. Staff are not the business, so "a payment to you
+  // is still on its way" is wrong when the panel shows it to a staff member.
+  audience: 'owner' | 'staff' = 'owner',
+) {
+  const them = audience === 'staff' ? 'them' : 'you';
   const [provider] = await db
     .select({ name: providers.businessName, deletedAt: providers.deletedAt })
     .from(providers)
@@ -676,7 +683,7 @@ export async function closeBusiness(db: Database, providerId: string) {
   if (pendingPayout) {
     throw conflict(
       'payout_pending',
-      `A payment to you is still on its way (${pendingPayout.reference}). The business can be closed once it has arrived.`,
+      `A payment to ${them} is still on its way (${pendingPayout.reference}). The business can be closed once it has arrived.`,
     );
   }
 
@@ -869,4 +876,51 @@ export async function listVehiclePhotos(db: Database, vehicleId: string) {
 export async function ownVehicleId(db: Database, providerId: string, vehicleId: string): Promise<string> {
   const vehicle = await loadOwnVehicle(db, providerId, vehicleId);
   return vehicle.id;
+}
+
+// ---- OPENING A CLOSED BUSINESS AGAIN ----
+// Staff only, from the admin panel. A business closed by mistake, or by the
+// wrong person in a family argument, was otherwise a support call that needed
+// somebody with database access.
+//
+// EVERY CAR STAYS SUSPENDED. Reopening says "this business may trade again", not
+// "put its whole fleet back on the site": each car goes live again deliberately,
+// through the approval that every listing goes through.
+export async function reopenBusiness(db: Database, providerId: string) {
+  const [provider] = await db
+    .select({ name: providers.businessName, deletedAt: providers.deletedAt })
+    .from(providers)
+    .where(eq(providers.id, providerId))
+    .limit(1);
+  if (!provider) throw notFound();
+  if (!provider.deletedAt) throw conflict('not_closed', 'This business is not closed.');
+
+  // Somebody has to be able to act for it. Closing an account removes its
+  // memberships, so a business whose owner then closed their own account would
+  // come back with nobody able to sign in for it — cars listed, nobody home.
+  const [owner] = await db
+    .select({ customerId: providerMembers.customerId })
+    .from(providerMembers)
+    .innerJoin(customers, eq(customers.id, providerMembers.customerId))
+    .where(
+      and(
+        eq(providerMembers.providerId, providerId),
+        eq(providerMembers.role, 'owner'),
+        isNull(customers.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!owner) {
+    throw conflict(
+      'no_owner',
+      'Nobody can act for this business any more — its owner closed their account. It cannot be opened again.',
+    );
+  }
+
+  await db.update(providers).set({ deletedAt: null }).where(eq(providers.id, providerId));
+  const suspended = await db
+    .select({ id: vehicles.id })
+    .from(vehicles)
+    .where(and(eq(vehicles.providerId, providerId), isNull(vehicles.deletedAt)));
+  return { businessName: provider.name, vehiclesStillSuspended: suspended.length };
 }

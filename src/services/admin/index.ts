@@ -50,6 +50,7 @@ import {
 import { buildMonthlySeries, buildSeries } from './analytics.js';
 import type { AdminActor } from './auth.js';
 import { recordAudit } from './audit.js';
+import { closeBusiness, reopenBusiness } from '../provider/index.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PAGE_LIMIT = 200;
@@ -67,6 +68,60 @@ function urgencyFor(since: Date): 'normal' | 'aging' | 'overdue' {
   if (days > 3) return 'aging';
   return 'normal';
 }
+
+// ---- WHAT STAFF MAY CORRECT ON A BUSINESS ----
+// Split by the table each one lives on. Deliberately NOT here: verification and
+// the SXM Verified badge, which have their own address, their own decision and
+// their own audit entry — two ways to set one thing is how an audit log stops
+// being trustworthy; the rating and review count, which are the sum of what
+// customers said, so a staff-editable rating is not a rating; and whether the
+// business is closed, which is what closeProvider is for.
+const PROFILE_FIELDS = new Set([
+  'legalName',
+  'contactEmail',
+  'website',
+  'registrationNumber',
+  'ownerName',
+  'ownerPhone',
+]);
+
+const PROVIDER_FIELD_LABELS: Record<string, string> = {
+  businessName: 'Business name',
+  side: 'Island side',
+  town: 'Town',
+  description: 'Description',
+  phone: 'Business phone',
+  respondsIn: 'Replies within',
+  deliversVehicles: 'Delivers vehicles',
+  airportPickup: 'Airport pickup',
+  legalName: 'Legal name',
+  contactEmail: 'Contact email',
+  website: 'Website',
+  registrationNumber: 'Registration number',
+  ownerName: 'Owner name',
+  ownerPhone: 'Owner phone',
+};
+
+// Each field carries its own type, so a wrong one is refused at the edge as a
+// 400 rather than reaching Postgres and failing as a driver error.
+export type ProviderFieldPatch =
+  | {
+      field:
+        | 'businessName'
+        | 'town'
+        | 'description'
+        | 'phone'
+        | 'respondsIn'
+        | 'legalName'
+        | 'contactEmail'
+        | 'website'
+        | 'registrationNumber'
+        | 'ownerName'
+        | 'ownerPhone';
+      value: string;
+    }
+  | { field: 'side'; value: 'dutch' | 'french' }
+  | { field: 'deliversVehicles' | 'airportPickup'; value: boolean };
 
 export function createAdminService(deps: AdminServiceDeps) {
   const { db, gateway, payments } = deps;
@@ -94,6 +149,18 @@ export function createAdminService(deps: AdminServiceDeps) {
     const [customer] = await db.select().from(customers).where(eq(customers.id, requireId(id, 'customer'))).limit(1);
     if (!customer) throw notFound('We could not find that customer.');
     return customer;
+  }
+
+  // One "we could not find that business", shared by every address that acts on
+  // one. A closed business still loads: staff look one up after it has gone.
+  async function loadProvider(id: string) {
+    const [provider] = await db
+      .select()
+      .from(providers)
+      .where(eq(providers.id, requireId(id, 'rental business')))
+      .limit(1);
+    if (!provider) throw notFound('We could not find that rental business.');
+    return provider;
   }
 
   async function loadBookingContext(bookingId: string) {
@@ -436,6 +503,108 @@ export function createAdminService(deps: AdminServiceDeps) {
         .limit(1);
       if (!row) throw notFound('We could not find that rental business.');
       return this.decorateProvider(row.provider, row.profile);
+    },
+
+    // ---- CLOSING A BUSINESS, AND OPENING IT AGAIN ----
+    // The panel used to do this by taking every car down one at a time, which is
+    // not the same thing: the cars come back the moment anybody puts one live,
+    // the business still looks open everywhere, and it can list a new car
+    // tomorrow. This is the real closure, in one transaction — and if the fourth
+    // of six take-downs failed, the panel no longer has to report a half-done
+    // job.
+    //
+    // THE AUDIT ENTRY IS THE POINT. A business closing itself leaves no staff
+    // record at all; a closure by staff has to leave one, with a reason.
+    async closeProvider(actor: AdminActor, id: string, input: { reason: string }) {
+      const provider = await loadProvider(id);
+      // Its own refusals come through untouched — already_closed, has_live_rental,
+      // has_held_deposit, payout_pending — because the panel shows the server's
+      // sentence to the staff member word for word. 'staff' only changes who
+      // those sentences address.
+      await closeBusiness(db, provider.id, 'staff');
+
+      await recordAudit(db, {
+        staffId: actor.staffId,
+        action: 'business_closed',
+        subjectType: 'provider',
+        subjectId: provider.id,
+        subjectLabel: `Business · ${provider.businessName}`,
+        field: 'Status',
+        before: 'Open',
+        after: 'Closed',
+        reason: input.reason,
+      });
+      return this.getProvider(provider.id);
+    },
+
+    async reopenProvider(actor: AdminActor, id: string, input: { reason: string }) {
+      const provider = await loadProvider(id);
+      const result = await reopenBusiness(db, provider.id);
+
+      await recordAudit(db, {
+        staffId: actor.staffId,
+        action: 'business_reopened',
+        subjectType: 'provider',
+        subjectId: provider.id,
+        subjectLabel: `Business · ${provider.businessName}`,
+        field: 'Status',
+        before: 'Closed',
+        // Said out loud in the log, because it is the part people are surprised
+        // by: the business may trade again, but its cars are still off the site.
+        after: `Open · ${result.vehiclesStillSuspended} car(s) still suspended`,
+        reason: input.reason,
+      });
+      return this.getProvider(provider.id);
+    },
+
+    // ---- CORRECTING A BUSINESS'S DETAILS ----
+    // For the narrow job staff actually need: a legal name spelled wrong on a
+    // payout, an email that bounces, a phone number that changed since a dispute
+    // was opened. One field at a time, with a reason, like a customer's record.
+    async updateProviderField(actor: AdminActor, id: string, input: ProviderFieldPatch & { reason: string }) {
+      const provider = await loadProvider(id);
+      const [profile] = await db
+        .select()
+        .from(providerBusinessProfiles)
+        .where(eq(providerBusinessProfiles.providerId, provider.id))
+        .limit(1);
+
+      const { field, value } = input;
+      const onProfile = PROFILE_FIELDS.has(field);
+      if (onProfile && !profile) {
+        throw conflict('no_business_profile', 'This business has no paperwork on file to change.');
+      }
+
+      const before = onProfile
+        ? String((profile as unknown as Record<string, unknown>)[field] ?? '')
+        : String((provider as unknown as Record<string, unknown>)[field] ?? '');
+
+      if (onProfile) {
+        await db
+          .update(providerBusinessProfiles)
+          .set({ [field]: value })
+          .where(eq(providerBusinessProfiles.providerId, provider.id));
+      } else {
+        await db
+          .update(providers)
+          .set({ [field]: value })
+          .where(eq(providers.id, provider.id));
+      }
+
+      await recordAudit(db, {
+        staffId: actor.staffId,
+        action: 'business_updated',
+        subjectType: 'provider',
+        subjectId: provider.id,
+        subjectLabel: `Business · ${provider.businessName}`,
+        // Words, not a column name: somebody reading the log next year should
+        // not have to know what "respondsIn" is.
+        field: PROVIDER_FIELD_LABELS[field] ?? field,
+        before,
+        after: String(value),
+        reason: input.reason,
+      });
+      return this.getProvider(provider.id);
     },
 
     // The "SXM Verified" decision. Only staff can make it, and it is recorded.

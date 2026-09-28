@@ -39,7 +39,11 @@ export type AuditAction =
   | 'staff_reset'
   | 'staff_disabled'
   | 'staff_enabled'
-  | 'password_changed';
+  | 'password_changed'
+  // A rental business, acted on by staff rather than by its own owner.
+  | 'business_closed'
+  | 'business_reopened'
+  | 'business_updated';
 
 export type AuditSubjectType =
   | 'customer'

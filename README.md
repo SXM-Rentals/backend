@@ -214,6 +214,8 @@ Everything lives under `/api/v1`.
 | GET | `/admin/analytics` | Money, bookings and sign-ups over time (`?months=` or `?from=&to=`) |
 | GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
+| POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code |
+| PATCH | `/admin/providers/:id` | Correct one of its details, with a reason |
 | GET | `/admin/bookings` · `/admin/payments` · `/admin/payouts` | Read-only views across the platform |
 | GET · POST | `/admin/deposits…` | Release a deposit, or keep part of it with a written reason |
 | GET · POST | `/admin/refunds…` `/admin/disputes…` | Decide refunds; assign and resolve disputes |
