@@ -562,6 +562,10 @@ export async function listPerformance(db: Database, providerId: string) {
         payoutCents: bookings.payoutCents,
         startDate: bookings.startDate,
         endDate: bookings.endDate,
+        // Both are needed to tell money that has been earned from money that is
+        // only booked: a rental counts as earned when it is over AND paid for.
+        status: bookings.status,
+        paymentStatus: bookings.paymentStatus,
       })
       .from(bookings)
       .where(
@@ -585,14 +589,20 @@ export async function listPerformance(db: Database, providerId: string) {
       (sum, row) => sum + daysBetween(row.startDate, row.endDate).filter((day) => day >= windowStart && day <= todayIso).length,
       0,
     );
+    // Earned is over and paid for. Everything else is booked: still to come, or
+    // finished and not yet paid.
+    const earned = forVehicle.filter((row) => row.status === 'completed' && row.paymentStatus === 'paid');
+    const booked = forVehicle.filter((row) => !(row.status === 'completed' && row.paymentStatus === 'paid'));
+
     return toVehiclePerformance({
       vehicleId: vehicle.id,
-      // Their share, after commission.
-      revenueCents: forVehicle.reduce((sum, row) => sum + row.payoutCents, 0),
+      // Their share, after commission, in both cases.
+      earnedCents: earned.reduce((sum, row) => sum + row.payoutCents, 0),
+      bookedCents: booked.reduce((sum, row) => sum + row.payoutCents, 0),
       bookings: forVehicle.length,
       daysOut,
       daysInPeriod: PERFORMANCE_WINDOW_DAYS,
-      inquiries: threadRows.find((thread) => thread.vehicleId === vehicle.id)?.count ?? 0,
+      conversations: threadRows.find((thread) => thread.vehicleId === vehicle.id)?.count ?? 0,
     });
   });
 }

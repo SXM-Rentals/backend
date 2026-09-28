@@ -7,7 +7,9 @@
 //   1. Moves bookings on as the dates pass — a rental becomes active on the day
 //      it starts and completed once the car is due back.
 //   2. Reminds customers collecting or returning a car tomorrow.
-//   3. Gathers what each rental business is owed for the past week into a
+//   3. Says which deposit holds will run out before the car is due back — a card
+//      hold lasts about seven days whatever the rental does.
+//   4. Gathers what each rental business is owed for the past week into a
 //      payout, ready to be sent.
 //
 // Everything here is safe to run twice: a booking already in the right state is
@@ -24,6 +26,7 @@ import { createConsoleEmailSender, createUnconfiguredEmailSender } from '../lib/
 import { advanceBookingStatuses } from '../services/booking-engine/lifecycle.js';
 import { createNotificationService } from '../services/notifications/index.js';
 import { buildPayout } from '../services/payment-splitting/index.js';
+import { holdsExpiringBeforeReturn } from '../services/payments/holds.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const asDate = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 10);
@@ -46,7 +49,26 @@ try {
   const reminders = await notifications.sendTomorrowsReminders();
   console.log(`Reminders: ${reminders.pickups} collecting tomorrow, ${reminders.returns} returning tomorrow.`);
 
-  // ---- 3: WHAT EACH BUSINESS IS OWED ----
+  // ---- 3: DEPOSIT HOLDS ABOUT TO RUN OUT ----
+  // A card hold lasts about seven days whatever the rental does, so on a longer
+  // rental the deposit stops existing while the car is still out. Nothing here
+  // renews it — that needs the customer's agreement to keep a card on file — but
+  // saying so out loud, every day, beats finding out when a claim fails.
+  const expiring = await holdsExpiringBeforeReturn(connection.db);
+  if (expiring.length === 0) {
+    console.log('Deposit holds: none running out before their car is due back.');
+  } else {
+    console.warn(`Deposit holds: ${expiring.length} will run out BEFORE the car is due back.`);
+    for (const hold of expiring) {
+      console.warn(
+        `  ${hold.bookingReference}: $${(hold.amountCents / 100).toFixed(2)} hold ends ` +
+          `${hold.expiresAt.slice(0, 10)}, car due back ${hold.rentalEndsOn}.`,
+      );
+    }
+    console.warn('  Act on these: take a fresh deposit, or accept there is nothing to claim against.');
+  }
+
+  // ---- 4: WHAT EACH BUSINESS IS OWED ----
   // Every business with a finished, paid-for rental not yet covered by a payout.
   const owed = await connection.db
     .selectDistinct({ providerId: bookings.providerId })

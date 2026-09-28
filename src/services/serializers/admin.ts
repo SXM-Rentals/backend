@@ -10,6 +10,7 @@
 // reported separately from revenue everywhere they appear.
 
 import type { bookings, customers, deposits, disputes, providers, refundRequests, vehicles } from '../../db/schema/index.js';
+import { holdExpiresAt, holdExpiringSoon } from '../payments/holds.js';
 
 type CustomerRow = typeof customers.$inferSelect;
 type ProviderRow = typeof providers.$inferSelect;
@@ -184,6 +185,12 @@ export function toDepositLedgerEntry(
     amount: toAmount(deposit.amountCents),
     status: deposit.status,
     authorizedAt: deposit.authorizedAt?.toISOString() ?? null,
+    // WHEN THE BANK WILL DROP THIS HOLD, and whether that is about to happen.
+    // A card hold lasts about seven days whatever the rental does, so on a longer
+    // rental the deposit quietly stops existing while the car is still out — and
+    // the first anybody knew was a claim that failed. See services/payments/holds.
+    holdExpiresAt: holdExpiresAt(deposit.authorizedAt)?.toISOString() ?? null,
+    holdExpiringSoon: deposit.status === 'held' && holdExpiringSoon(deposit.authorizedAt),
     ...(deposit.releasedAt ? { releasedAt: deposit.releasedAt.toISOString() } : {}),
     ...(deposit.claimedAt ? { claimedAt: deposit.claimedAt.toISOString() } : {}),
     // Required whenever a deposit is kept rather than returned.
