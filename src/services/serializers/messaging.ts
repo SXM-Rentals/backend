@@ -14,7 +14,7 @@
 // business screens flip that round when drawing the bubbles.
 
 import type { chatMessages, chatThreads } from '../../db/schema/index.js';
-import type { VerificationStatus } from '../../types/api.js';
+import type { VerificationStatus, CarSummary } from '../../types/api.js';
 import { renterDisplayName } from './bookings.js';
 
 type ThreadRow = typeof chatThreads.$inferSelect;
@@ -27,6 +27,10 @@ export type RenterSummary = {
   lastName: string;
   verificationStatus: VerificationStatus;
 };
+
+// What a conversation needs besides its own rows. The customer's view names the
+// business; the business's view does not need its own name.
+export type ThreadContext = { vehicle: CarSummary | null; providerName: string };
 
 export function toChatMessage(message: MessageRow) {
   return {
@@ -44,10 +48,19 @@ const byTime = (a: MessageRow, b: MessageRow) => a.sentAt.getTime() - b.sentAt.g
 
 // ---- THE CUSTOMER'S VIEW ----
 // Unread means messages the BUSINESS sent that the customer has not read.
-export function toChatThread(thread: ThreadRow, messages: MessageRow[], bookingRef?: string) {
+export function toChatThread(
+  thread: ThreadRow,
+  messages: MessageRow[],
+  context: ThreadContext,
+  bookingRef?: string,
+) {
   return {
     id: thread.id,
     providerId: thread.providerId,
+    // Who the customer is talking to, and about which car, so a conversation
+    // header needs nothing else loaded.
+    providerName: context.providerName,
+    vehicle: context.vehicle,
     ...(bookingRef ? { bookingRef } : {}),
     messages: [...messages].sort(byTime).map(toChatMessage),
     unreadCount: messages.filter((message) => message.sender === 'provider' && message.readAt === null).length,
@@ -60,10 +73,12 @@ export function toBusinessChatThread(
   thread: ThreadRow,
   messages: MessageRow[],
   renter: RenterSummary,
+  vehicle: CarSummary | null,
   bookingRef?: string,
 ) {
   return {
     id: thread.id,
+    vehicle,
     renterDisplayName: renterDisplayName(renter.firstName, renter.lastName),
     renterVerified: renter.verificationStatus === 'approved',
     ...(bookingRef ? { bookingRef } : {}),

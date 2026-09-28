@@ -37,6 +37,7 @@ import {
 } from '../../db/schema/index.js';
 import { AppError, conflict, notFound } from '../../lib/errors.js';
 import type { PhotoStorage } from '../../lib/storage.js';
+import { carSummariesFor, carSummaryFor } from '../summaries/index.js';
 import type { Actor } from '../../lib/ownership.js';
 import { isUuid } from '../../lib/ownership.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
@@ -508,6 +509,8 @@ export async function listProviderBookings(db: Database, providerId: string) {
     .from(deposits)
     .where(inArray(deposits.bookingId, rows.map((row) => row.booking.id)));
 
+  const cars = await carSummariesFor(db, rows.map((row) => row.booking.vehicleId));
+
   return rows.map((row) =>
     toProviderBooking(
       row.booking,
@@ -517,6 +520,7 @@ export async function listProviderBookings(db: Database, providerId: string) {
         lastName: row.renter.lastName,
         verificationStatus: row.renter.verificationStatus,
       },
+      cars.get(row.booking.vehicleId) ?? null,
     ),
   );
 }
@@ -531,12 +535,20 @@ export async function getProviderBooking(db: Database, providerId: string, booki
     .limit(1);
   if (!row) throw notFound('We could not find that booking.');
 
-  const [deposit] = await db.select().from(deposits).where(eq(deposits.bookingId, row.booking.id)).limit(1);
-  return toProviderBooking(row.booking, deposit, {
-    firstName: row.renter.firstName,
-    lastName: row.renter.lastName,
-    verificationStatus: row.renter.verificationStatus,
-  });
+  const [[deposit], vehicle] = await Promise.all([
+    db.select().from(deposits).where(eq(deposits.bookingId, row.booking.id)).limit(1),
+    carSummaryFor(db, row.booking.vehicleId),
+  ]);
+  return toProviderBooking(
+    row.booking,
+    deposit,
+    {
+      firstName: row.renter.firstName,
+      lastName: row.renter.lastName,
+      verificationStatus: row.renter.verificationStatus,
+    },
+    vehicle,
+  );
 }
 
 // ---- WHAT THEY HAVE BEEN PAID ----

@@ -13,6 +13,11 @@ import { getTableColumns } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bookingPriceLines, bookings, deposits, payouts } from '../../src/db/schema/index.js';
 import { toCustomerBooking, toProviderBooking } from '../../src/services/serializers/bookings.js';
+
+// The car and business a booking now carries, so a booking card can be drawn
+// without fetching the whole catalogue. Neither adds a contact detail, which is
+// what rule 2 below is about.
+const CAR = { id: 'v-1', make: 'Suzuki', model: 'Jimny', year: 2024, photo: null };
 import { createTestContext, seedBooking, type TestContext } from '../helpers.js';
 
 let ctx: TestContext;
@@ -45,7 +50,7 @@ describe('rule 1: a security deposit is never revenue', () => {
       .values({ bookingId: booking.id, amountCents: 50000, status: 'held' })
       .returning();
 
-    const view = toCustomerBooking(booking, lines, deposit);
+    const view = toCustomerBooking(booking, lines, deposit, { vehicle: CAR, providerName: 'Island Wheels' });
     expect(view.totalDueToday).toBe(195);
     expect(view.lines.reduce((sum, line) => sum + line.amount, 0)).toBe(195);
     expect(view.lines.some((line) => /deposit/i.test(line.label))).toBe(false);
@@ -59,7 +64,7 @@ describe('rule 1: a security deposit is never revenue', () => {
       .insert(deposits)
       .values({ bookingId: booking.id, amountCents: 50000, status: 'held' })
       .returning();
-    const view = toProviderBooking(booking, deposit, customer);
+    const view = toProviderBooking(booking, deposit, customer, CAR);
     expect(view.grossAmount).toBe(195);
     expect(view.commission + view.netAmount).toBe(view.grossAmount);
   });
@@ -79,7 +84,7 @@ describe("rule 2: a rental business never sees a customer's contact details", ()
     expect(customer.phone).toBeTruthy();
 
     // Passing the full row is exactly the mistake this rule has to survive.
-    const view = toProviderBooking(booking, undefined, customer);
+    const view = toProviderBooking(booking, undefined, customer, CAR);
     const json = JSON.stringify(view);
 
     expect(json).not.toContain(customer.email);
@@ -90,6 +95,9 @@ describe("rule 2: a rental business never sees a customer's contact details", ()
         'id',
         'reference',
         'vehicleId',
+        // The car, named. It carries make, model, year and a photo — and no
+        // contact detail, which is what this test is guarding.
+        'vehicle',
         'status',
         'renterDisplayName',
         'renterVerified',
@@ -114,7 +122,7 @@ describe("rule 2: a rental business never sees a customer's contact details", ()
 describe("rule 3: a business always sees its own share, and the money adds up", () => {
   it('always returns gross, commission and net together', async () => {
     const { booking, customer } = await seedBooking(ctx.db);
-    const view = toProviderBooking(booking, undefined, customer);
+    const view = toProviderBooking(booking, undefined, customer, CAR);
     expect(view).toMatchObject({ grossAmount: 195, commission: 58.5, netAmount: 136.5 });
   });
 

@@ -19,6 +19,7 @@
 // talked to, so a thread cannot be used to advertise somebody else's fleet.
 
 import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { carSummariesFor, carSummaryFor, providerNameFor, providerNamesFor } from '../summaries/index.js';
 import type { Database } from '../../db/client.js';
 import { bookings, chatMessages, chatThreads, customers, vehicles } from '../../db/schema/index.js';
 import { badRequest, notFound } from '../../lib/errors.js';
@@ -77,15 +78,22 @@ export async function listThreadsForCustomer(db: Database, actor: Actor) {
     .orderBy(desc(chatThreads.updatedAt));
   if (threads.length === 0) return [];
 
-  const [messages, refs] = await Promise.all([
+  const [messages, refs, cars, names] = await Promise.all([
     messagesFor(db, threads.map((thread) => thread.id)),
     bookingRefsFor(db, threads),
+    // Once for the whole list, not once per conversation.
+    carSummariesFor(db, threads.map((thread) => thread.vehicleId ?? '')),
+    providerNamesFor(db, threads.map((thread) => thread.providerId)),
   ]);
 
   return threads.map((thread) =>
     toChatThread(
       thread,
       messages.filter((message) => message.threadId === thread.id),
+      {
+        vehicle: thread.vehicleId ? cars.get(thread.vehicleId) ?? null : null,
+        providerName: names.get(thread.providerId) ?? '',
+      },
       thread.bookingId ? refs.get(thread.bookingId) : undefined,
     ),
   );
@@ -104,8 +112,13 @@ async function loadCustomerThread(db: Database, actor: Actor, threadId: string) 
 
 export async function getThreadForCustomer(db: Database, actor: Actor, threadId: string) {
   const thread = await loadCustomerThread(db, actor, threadId);
-  const [messages, refs] = await Promise.all([messagesFor(db, [thread.id]), bookingRefsFor(db, [thread])]);
-  return toChatThread(thread, messages, thread.bookingId ? refs.get(thread.bookingId) : undefined);
+  const [messages, refs, vehicle, providerName] = await Promise.all([
+    messagesFor(db, [thread.id]),
+    bookingRefsFor(db, [thread]),
+    thread.vehicleId ? carSummaryFor(db, thread.vehicleId) : Promise.resolve(null),
+    providerNameFor(db, thread.providerId),
+  ]);
+  return toChatThread(thread, messages, { vehicle, providerName }, thread.bookingId ? refs.get(thread.bookingId) : undefined);
 }
 
 // Starting a conversation. Asking the same business again continues the
@@ -212,6 +225,8 @@ export async function listThreadsForProvider(db: Database, providerId: string) {
     bookingRefsFor(db, threads),
   ]);
 
+  const cars = await carSummariesFor(db, rows.map((row) => row.thread.vehicleId ?? ''));
+
   return rows.map((row) =>
     toBusinessChatThread(
       row.thread,
@@ -221,6 +236,7 @@ export async function listThreadsForProvider(db: Database, providerId: string) {
         lastName: row.renter.lastName,
         verificationStatus: row.renter.verificationStatus,
       },
+      row.thread.vehicleId ? cars.get(row.thread.vehicleId) ?? null : null,
       row.thread.bookingId ? refs.get(row.thread.bookingId) : undefined,
     ),
   );
@@ -249,6 +265,7 @@ export async function getThreadForProvider(db: Database, providerId: string, thr
       lastName: row.renter.lastName,
       verificationStatus: row.renter.verificationStatus,
     },
+    row.thread.vehicleId ? await carSummaryFor(db, row.thread.vehicleId) : null,
     row.thread.bookingId ? refs.get(row.thread.bookingId) : undefined,
   );
 }

@@ -125,11 +125,27 @@ export type PriceLine = {
 };
 
 // A booking as the CUSTOMER sees it.
+// A few fields of a car, carried by anything that lists bookings or
+// conversations. Null when the car has been taken off the platform since.
+export type CarSummary = {
+  id: string;
+  make: string;
+  model: string;
+  year: number;
+  // The cover photo, or null while the business has not added one.
+  photo: string | null;
+};
+
 export type Booking = {
   id: string;
   reference: string;
   vehicleId: string;
   providerId: string;
+  // Enough of the car and the business to draw a booking card without fetching
+  // the whole catalogue first. The ids above stay, so nothing that reads them
+  // breaks.
+  vehicle: CarSummary | null;
+  providerName: string;
   status: BookingStatus;
   startDate: string;
   endDate: string;
@@ -154,6 +170,7 @@ export type ProviderBooking = {
   id: string;
   reference: string;
   vehicleId: string;
+  vehicle: CarSummary | null;
   status: BookingStatus;
   renterDisplayName: string;
   renterVerified: boolean;

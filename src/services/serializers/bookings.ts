@@ -16,7 +16,7 @@
 //    always returned together.
 
 import type { bookingPriceLines, bookings, deposits } from '../../db/schema/index.js';
-import type { Booking, DepositStatus, ProviderBooking, VerificationStatus } from '../../types/api.js';
+import type { Booking, DepositStatus, ProviderBooking, VerificationStatus, CarSummary } from '../../types/api.js';
 
 type BookingRow = typeof bookings.$inferSelect;
 type PriceLineRow = typeof bookingPriceLines.$inferSelect;
@@ -29,6 +29,9 @@ export type RenterSummary = {
   lastName: string;
   verificationStatus: VerificationStatus;
 };
+
+// What a booking needs besides its own row, gathered once for a whole list.
+export type BookingContext = { vehicle: CarSummary | null; providerName: string };
 
 // Cents to dollars: 4550 → 45.5
 const toAmount = (cents: number) => cents / 100;
@@ -48,12 +51,20 @@ export function renterDisplayName(firstName: string, lastName: string): string {
 }
 
 // ---- THE CUSTOMER'S VIEW ----
-export function toCustomerBooking(booking: BookingRow, lines: PriceLineRow[], deposit: DepositRow | undefined): Booking {
+export function toCustomerBooking(
+  booking: BookingRow,
+  lines: PriceLineRow[],
+  deposit: DepositRow | undefined,
+  // Loaded in one go by services/summaries for the whole list, never per row.
+  context: BookingContext,
+): Booking {
   return {
     id: booking.id,
     reference: booking.reference,
     vehicleId: booking.vehicleId,
     providerId: booking.providerId,
+    vehicle: context.vehicle,
+    providerName: context.providerName,
     status: booking.status,
     startDate: booking.startDate,
     endDate: booking.endDate,
@@ -81,12 +92,16 @@ export function toProviderBooking(
   booking: BookingRow,
   deposit: DepositRow | undefined,
   renter: RenterSummary,
+  // A business needs the car named too — its own fleet, but a list of
+  // references is not a list anybody can read. It does not need its own name.
+  vehicle: CarSummary | null,
   threadId?: string,
 ): ProviderBooking {
   return {
     id: booking.id,
     reference: booking.reference,
     vehicleId: booking.vehicleId,
+    vehicle,
     status: booking.status,
     renterDisplayName: renterDisplayName(renter.firstName, renter.lastName),
     renterVerified: renter.verificationStatus === 'approved',

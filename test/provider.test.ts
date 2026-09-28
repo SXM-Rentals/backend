@@ -210,6 +210,8 @@ describe('bookings across the fleet', () => {
         'status',
         'renterDisplayName',
         'renterVerified',
+        // The car, named rather than left as a bare id.
+        'vehicle',
         'startDate',
         'endDate',
         'pickupTime',

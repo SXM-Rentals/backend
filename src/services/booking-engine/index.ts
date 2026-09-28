@@ -20,7 +20,7 @@
 // No money moves yet — Stripe arrives in Phase 3. A new booking's deposit is
 // recorded as "not taken" and the booking as "authorized".
 
-import { and, asc, eq, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   bookingPriceLines,
@@ -35,6 +35,7 @@ import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
 import type { Booking } from '../../types/api.js';
 import { toCustomerBooking } from '../serializers/bookings.js';
+import { carSummariesFor, carSummaryFor, providerNameFor, providerNamesFor } from '../summaries/index.js';
 import { countRentalDays, isVehicleFree, today } from '../availability-engine/index.js';
 
 type VehicleRow = typeof vehicles.$inferSelect;
@@ -246,7 +247,12 @@ export async function createBooking(
           .returning()
       : [undefined];
 
-    return toCustomerBooking(booking, lines, deposit);
+    return toCustomerBooking(booking, lines, deposit, {
+      // The car is already loaded here — it is what was just booked — so this
+      // costs one more small query for the business's name and nothing else.
+      vehicle: { id: vehicle.id, make: vehicle.make, model: vehicle.model, year: vehicle.year, photo: null },
+      providerName: await providerNameFor(tx, booking.providerId),
+    });
   });
 
   // The booking is already made; telling the customer comes after.
@@ -265,7 +271,10 @@ export async function listBookingsFor(db: Database, actor: Actor): Promise<Booki
     .where(eq(bookings.customerId, actor.customerId))
     .orderBy(asc(bookings.startDate));
 
-  return Promise.all(rows.map((booking) => withLinesAndDeposit(db, booking)));
+  // Gathered once for the whole list. This used to be one round of queries per
+  // booking, which is the kind of thing that is invisible with three bookings
+  // and unusable with three hundred.
+  return listWithLinesAndDeposits(db, rows);
 }
 
 export async function getBookingFor(db: Database, actor: Actor, bookingId: string): Promise<Booking> {
@@ -391,11 +400,38 @@ async function loadOwnBooking(db: Database, actor: Actor, bookingId: string) {
 }
 
 async function withLinesAndDeposit(db: Database, booking: typeof bookings.$inferSelect): Promise<Booking> {
-  const [lines, [deposit]] = await Promise.all([
+  const [lines, [deposit], vehicle, providerName] = await Promise.all([
     db.select().from(bookingPriceLines).where(eq(bookingPriceLines.bookingId, booking.id)),
     db.select().from(deposits).where(eq(deposits.bookingId, booking.id)).limit(1),
+    carSummaryFor(db, booking.vehicleId),
+    providerNameFor(db, booking.providerId),
   ]);
-  return toCustomerBooking(booking, lines, deposit);
+  return toCustomerBooking(booking, lines, deposit, { vehicle, providerName });
+}
+
+// A whole list of bookings, with the cars and business names gathered ONCE
+// rather than per booking. Everything that lists bookings goes through here.
+async function listWithLinesAndDeposits(
+  db: Database,
+  rows: (typeof bookings.$inferSelect)[],
+): Promise<Booking[]> {
+  if (rows.length === 0) return [];
+  const ids = rows.map((row) => row.id);
+  const [lines, depositRows, cars, names] = await Promise.all([
+    db.select().from(bookingPriceLines).where(inArray(bookingPriceLines.bookingId, ids)),
+    db.select().from(deposits).where(inArray(deposits.bookingId, ids)),
+    carSummariesFor(db, rows.map((row) => row.vehicleId)),
+    providerNamesFor(db, rows.map((row) => row.providerId)),
+  ]);
+
+  return rows.map((row) =>
+    toCustomerBooking(
+      row,
+      lines.filter((line) => line.bookingId === row.id),
+      depositRows.find((deposit) => deposit.bookingId === row.id),
+      { vehicle: cars.get(row.vehicleId) ?? null, providerName: names.get(row.providerId) ?? '' },
+    ),
+  );
 }
 
 // Kept so a later phase can reuse the shape of a renter without reaching for
