@@ -56,15 +56,32 @@ export type ProviderContext = { providerId: string; role: 'owner' | 'staff' };
 // Everything else in this file starts here. Somebody with no business linked to
 // their account is told so plainly, rather than being shown an empty dashboard.
 export async function requireProviderFor(db: Database, actor: Actor): Promise<ProviderContext> {
-  const [membership] = await db
+  // An OPEN business first. Somebody who closed one and opened another acts for
+  // the one that still trades — and nobody acts for a closed business at all,
+  // because before this check every /providers/me/ address kept working after
+  // closing, including adding a car, which put new listings into the approval
+  // queue for a business that no longer trades.
+  const [open] = await db
     .select({ providerId: providerMembers.providerId, role: providerMembers.role })
+    .from(providerMembers)
+    .innerJoin(providers, eq(providers.id, providerMembers.providerId))
+    .where(and(eq(providerMembers.customerId, actor.customerId), isNull(providers.deletedAt)))
+    .limit(1);
+  if (open) return open;
+
+  // None open. Was there ever one? The two cases read differently to somebody
+  // looking at the screen, so they are answered differently: a closed business
+  // gets its own code, and the website shows it its own page rather than
+  // pretending it never had a business.
+  const [closed] = await db
+    .select({ providerId: providerMembers.providerId })
     .from(providerMembers)
     .where(eq(providerMembers.customerId, actor.customerId))
     .limit(1);
-  if (!membership) {
-    throw new AppError(403, 'not_a_provider', 'This account is not linked to a rental business.');
+  if (closed) {
+    throw new AppError(403, 'business_closed', 'This business is closed, so it can no longer be changed.');
   }
-  return membership;
+  throw new AppError(403, 'not_a_provider', 'This account is not linked to a rental business.');
 }
 
 export type ApplyInput = {
@@ -93,10 +110,15 @@ export type ApplyInput = {
 // "SXM Verified" badge appears, and its cars wait for approval before any
 // customer can see them.
 export async function applyAsProvider(db: Database, actor: Actor, input: ApplyInput) {
+  // Only an OPEN business makes somebody already a provider. A membership of a
+  // closed one stays on the row so past bookings and payouts still point at
+  // something real; counting it here would mean anybody who ever closed a
+  // business could never open another, which is not what closing means.
   const [existing] = await db
     .select({ providerId: providerMembers.providerId })
     .from(providerMembers)
-    .where(eq(providerMembers.customerId, actor.customerId))
+    .innerJoin(providers, eq(providers.id, providerMembers.providerId))
+    .where(and(eq(providerMembers.customerId, actor.customerId), isNull(providers.deletedAt)))
     .limit(1);
   if (existing) {
     throw conflict('already_a_provider', 'This account is already linked to a rental business.');

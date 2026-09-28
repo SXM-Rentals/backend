@@ -212,7 +212,7 @@ describe('a business owner closing the business', () => {
     // The car can be found before.
     expect((await get(`/vehicles/${car.id}`)).statusCode).toBe(200);
 
-    const closed = await post('/providers/me/close', {}, auth(business.owner.bearer));
+    const closed = await post('/providers/me/close', { password: GOOD_PASSWORD }, auth(business.owner.bearer));
     expect(closed.statusCode).toBe(200);
     expect(closed.json()).toMatchObject({ businessName: 'Orient Bay Autos', vehiclesDelisted: 1 });
 
@@ -229,7 +229,7 @@ describe('a business owner closing the business', () => {
     expect(vehicleRow?.listingStatus).toBe('suspended');
 
     // Closing twice is refused rather than silently repeated.
-    const again = await post('/providers/me/close', {}, auth(business.owner.bearer));
+    const again = await post('/providers/me/close', { password: GOOD_PASSWORD }, auth(business.owner.bearer));
     expect([403, 404, 409]).toContain(again.statusCode);
   });
 
@@ -256,7 +256,7 @@ describe('a business owner closing the business', () => {
       totalDueTodayCents: 19500,
     });
 
-    const refused = await post('/providers/me/close', {}, auth(business.owner.bearer));
+    const refused = await post('/providers/me/close', { password: GOOD_PASSWORD }, auth(business.owner.bearer));
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.code).toBe('has_live_rental');
   });
@@ -276,7 +276,7 @@ describe('a business owner closing the business', () => {
       periodEnd: dateIn(-1),
     });
 
-    const refused = await post('/providers/me/close', {}, auth(business.owner.bearer));
+    const refused = await post('/providers/me/close', { password: GOOD_PASSWORD }, auth(business.owner.bearer));
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.code).toBe('payout_pending');
     expect(refused.json().error.message).toContain('SXM-PO-9001');
@@ -284,7 +284,94 @@ describe('a business owner closing the business', () => {
 
   it('is refused for a customer who does not run a business at all', async () => {
     const person = await aCustomer();
-    const refused = await post('/providers/me/close', {}, auth(person.bearer));
+    const refused = await post('/providers/me/close', { password: GOOD_PASSWORD }, auth(person.bearer));
     expect([403, 404]).toContain(refused.statusCode);
+  });
+});
+
+describe('what a closed business can no longer do', () => {
+  it('is refused on every one of its own addresses, cars included', async () => {
+    const business = await aBusiness('Marigot Motors');
+    const closed = await post('/providers/me/close', { password: GOOD_PASSWORD }, auth(business.owner.bearer));
+    expect(closed.statusCode).toBe(200);
+
+    // THE ONE THAT MATTERED: before this, a closed business could still add a
+    // car, and the listing went into the approval queue for a business that no
+    // longer trades.
+    const listed = await post(
+      '/providers/me/vehicles',
+      {
+        make: 'Kia',
+        model: 'Picanto',
+        year: 2024,
+        vehicleClass: 'economy',
+        transmission: 'automatic',
+        fuel: 'petrol',
+        seats: 4,
+        doors: 4,
+        dailyRate: 45,
+        depositAmount: 300,
+        pickupTown: 'Marigot',
+        side: 'french',
+        latitude: 18.07,
+        longitude: -63.08,
+      },
+      auth(business.owner.bearer),
+    );
+    expect(listed.statusCode).toBe(403);
+    expect(listed.json().error.code).toBe('business_closed');
+
+    // The dashboard, the fleet and the profile all say the same thing, rather
+    // than showing a business that is gone.
+    for (const url of ['/providers/me', '/providers/me/summary', '/providers/me/vehicles', '/providers/me/bookings']) {
+      const refused = await get(url, auth(business.owner.bearer));
+      expect(refused.statusCode).toBe(403);
+      expect(refused.json().error.code).toBe('business_closed');
+    }
+  });
+
+  it('lets its owner open a new business afterwards', async () => {
+    const business = await aBusiness('Oyster Pond Cars');
+    await post('/providers/me/close', { password: GOOD_PASSWORD }, auth(business.owner.bearer));
+
+    // Closing a business is not a life sentence. The old membership stays on the
+    // row so past bookings still point at it, but only an OPEN business makes
+    // somebody already a provider.
+    const again = await post(
+      '/providers/apply',
+      {
+        businessName: 'Oyster Pond Cars II',
+        legalName: 'Oyster Pond Cars II N.V.',
+        contactEmail: 'hello@oysterpond2.sx',
+        ownerName: 'Marie Richardson',
+        ownerPhone: '+1 721 555 0188',
+        town: 'Oyster Pond',
+        side: 'dutch',
+        operatingSide: 'dutch',
+        description: 'Second time around.',
+        deliversVehicles: false,
+      },
+      auth(business.owner.bearer),
+    );
+    expect(again.statusCode).toBe(201);
+
+    // And that new business works, while the closed one stays closed.
+    const profile = await get('/providers/me', auth(business.owner.bearer));
+    expect(profile.statusCode).toBe(200);
+    expect(profile.json().providerId).toBe(again.json().providerId);
+  });
+
+  it('will not close on a session alone — the password is asked for again', async () => {
+    const business = await aBusiness('Belair Rentals');
+
+    const noPassword = await post('/providers/me/close', {}, auth(business.owner.bearer));
+    expect(noPassword.statusCode).toBe(400);
+
+    const wrong = await post('/providers/me/close', { password: 'not my password' }, auth(business.owner.bearer));
+    expect(wrong.statusCode).toBe(400);
+    expect(wrong.json().error.code).toBe('wrong_password');
+
+    // Nothing happened: the business still trades.
+    expect((await get('/providers/me', auth(business.owner.bearer))).statusCode).toBe(200);
   });
 });

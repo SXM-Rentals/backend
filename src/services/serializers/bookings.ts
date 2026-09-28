@@ -97,9 +97,18 @@ export function toProviderBooking(
     returnTime: booking.returnTime,
     collection: booking.collection,
     location: booking.location,
-    grossAmount: toAmount(booking.grossCents),
-    commission: toAmount(booking.commissionCents),
-    netAmount: toAmount(booking.payoutCents),
+    // A CANCELLED BOOKING PAYS NOBODY. The figures stay on the row — they are
+    // what it would have been worth, and the ledger needs them — but reporting
+    // them here told a business "you receive $210" for money that is never
+    // coming. Zero is the true answer, and anything that adds these up gets the
+    // right total without having to know about cancellations.
+    ...(booking.status === 'cancelled'
+      ? { grossAmount: 0, commission: 0, netAmount: 0 }
+      : {
+          grossAmount: toAmount(booking.grossCents),
+          commission: toAmount(booking.commissionCents),
+          netAmount: toAmount(booking.payoutCents),
+        }),
     ...depositView(deposit),
   };
 }

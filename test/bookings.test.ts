@@ -204,8 +204,11 @@ describe('your own bookings', () => {
     const cancelled = await post(`/bookings/${created.id}/cancel`, {}, asCustomer());
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().status).toBe('cancelled');
-    // A deposit that was never taken stops being expected.
-    expect(cancelled.json().depositStatus).toBe('released');
+    // A DEPOSIT NEVER TAKEN STAYS "NOT TAKEN", rather than being reported as
+    // released. "The hold on your card has been lifted" and "nothing was ever
+    // held" are different sentences to a customer, and marking both the same
+    // left the apps unable to tell which had happened.
+    expect(cancelled.json().depositStatus).toBe('not_taken');
 
     // Cancelling twice is refused, and the dates are free again.
     expect((await post(`/bookings/${created.id}/cancel`, {}, asCustomer())).statusCode).toBe(409);

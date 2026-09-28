@@ -26,6 +26,7 @@ import {
   getBookingFor,
   listBookingsFor,
   quoteFor,
+  cancellationTerms,
 } from '../../services/booking-engine/index.js';
 import type { NotificationService } from '../../services/notifications/index.js';
 
@@ -86,6 +87,14 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
     return getBookingFor(db, actor, id);
+  });
+
+  // What cancelling would be worth back, asked before pressing the button. The
+  // website used to work this out in the browser from its own copy of the
+  // policy; the policy lives in one place on the server now.
+  app.get('/:id/cancellation', async (request) => {
+    const { id } = parseInput(idParam, request.params);
+    return cancellationTerms(db, requireCustomer(request), id);
   });
 
   app.post('/:id/cancel', async (request) => {

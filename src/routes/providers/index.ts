@@ -46,6 +46,9 @@ import type { PhotoStorage } from '../../lib/storage.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
+import { AUTH_LIMITS } from '../../plugins/rate-limit.js';
+import { PASSWORD_MAX_LENGTH } from '../../lib/passwords.js';
+import { assertOwnPassword } from '../../services/auth/credentials.js';
 import {
   addVehicle,
   applyAsProvider,
@@ -88,6 +91,7 @@ const listQuery = z.object({
 });
 const idParam = z.object({ id: z.string().max(64) });
 const photoParams = z.object({ id: z.string().max(64), photoId: z.string().max(64) });
+const closeBody = z.object({ password: z.string().min(1).max(PASSWORD_MAX_LENGTH) });
 // Only an address, and only one that storage recognises as this car's — the
 // check that matters happens in the service, not here.
 const photoBody = z.object({ url: z.url().max(500) });
@@ -171,7 +175,15 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
   // ---- THE PUBLIC HALF ----
   app.get('/', async (request) => {
     const filters = parseInput(listQuery, request.query);
-    const conditions = [isNull(providers.deletedAt)];
+    // ONLY BUSINESSES STAFF HAVE CHECKED. Before this, anybody who signed up
+    // and applied appeared in the public list of rental companies the same
+    // minute — a stranger's business, on a live site, with nobody having looked
+    // at it. The list is empty until staff approve one, which is the honest
+    // state rather than a filled list nobody vouched for.
+    //
+    // GET /providers/:id still serves an unverified business, so a direct link
+    // a business was given to check its own page keeps working.
+    const conditions = [isNull(providers.deletedAt), eq(providers.isVerified, true)];
     if (filters.side) conditions.push(eq(providers.side, filters.side));
 
     const rows = await db
@@ -209,12 +221,19 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
   // Closing the business for good. Every car comes off the site and nobody can
   // act for it again — so it is refused while a rental is running, a deposit is
   // held, or a payment to them is still on its way.
-  app.post('/me/close', async (request) => {
-    const { providerId, role } = await businessFor(request);
+  app.post('/me/close', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = requireCustomer(request);
+    const { providerId, role } = await requireProviderFor(db, actor);
     // Staff who work for the business cannot close it; only whoever owns it.
     if (role !== 'owner') {
       throw new AppError(403, 'owner_only', 'Only the owner of the business can close it.');
     }
+    // THE PASSWORD AGAIN, as closing an account asks for it. This delists every
+    // car and takes the business page down, and a session left open on a
+    // borrowed laptop should not be enough to do that. Rate-limited like the
+    // other password routes so it cannot be used to guess one.
+    const { password } = parseInput(closeBody, request.body);
+    await assertOwnPassword(db, actor.customerId, password);
     return closeBusiness(db, providerId);
   });
 

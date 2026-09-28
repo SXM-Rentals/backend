@@ -180,6 +180,7 @@ Everything lives under `/api/v1`.
 | POST | `/bookings` | Make a booking |
 | GET | `/bookings` | Your own bookings |
 | GET | `/bookings/:id` | One of your own bookings |
+| GET | `/bookings/:id/cancellation` | What cancelling now would be worth back, before confirming |
 | POST | `/bookings/:id/cancel` | Cancel one that has not started |
 | POST | `/payments/bookings/:id/intent` | Start (or resume) paying for a booking |
 | POST | `/deposits/bookings/:id/authorize` | Place the deposit hold on the card |

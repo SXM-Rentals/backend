@@ -27,6 +27,7 @@ import {
   bookings,
   deposits,
   platformSettings,
+  refundRequests,
   vehicles,
   type customers,
 } from '../../db/schema/index.js';
@@ -272,6 +273,59 @@ export async function getBookingFor(db: Database, actor: Actor, bookingId: strin
   return withLinesAndDeposit(db, booking);
 }
 
+// ---- WHAT A CANCELLATION IS WORTH BACK ----
+// The cancellation policy, in one place, so the figure a customer is shown
+// before confirming and the figure that reaches the refunds queue can never be
+// two different numbers.
+//
+//   more than 48 hours before pickup -> everything back
+//   less than 48 hours before pickup -> half back
+//   the rental has already started   -> nothing back
+//
+// The reasoning behind the middle band: a business that has turned other
+// bookings away for those dates cannot fill them the night before. The
+// security deposit is not part of this at all — a hold is released whenever a
+// booking is cancelled, whatever the timing, because it was never revenue.
+export const FREE_CANCELLATION_HOURS = 48;
+export const LATE_CANCELLATION_REFUND = 0.5;
+
+export type RefundDue = {
+  amountCents: number;
+  // For the sentence the app shows, and the reason written onto the request.
+  rule: 'free' | 'late' | 'started';
+  hoursBeforePickup: number;
+};
+
+// `paidCents` is what the customer actually handed over, which is not the same
+// as what the booking is worth: nothing is refunded on a booking nobody paid.
+export function refundDue(input: { startDate: string; pickupTime: string; paidCents: number }, now: Date): RefundDue {
+  // The booking's own dates are island local time; the server may be anywhere,
+  // so the comparison is made in UTC from the stored date and time.
+  const pickup = new Date(`${input.startDate}T${input.pickupTime.padEnd(5, '0')}:00Z`);
+  const hoursBeforePickup = (pickup.getTime() - now.getTime()) / (60 * 60 * 1000);
+
+  if (hoursBeforePickup <= 0) return { amountCents: 0, rule: 'started', hoursBeforePickup };
+  if (hoursBeforePickup >= FREE_CANCELLATION_HOURS) {
+    return { amountCents: input.paidCents, rule: 'free', hoursBeforePickup };
+  }
+  // Rounded to the cent, and never more than was paid.
+  return {
+    amountCents: Math.min(input.paidCents, Math.round(input.paidCents * LATE_CANCELLATION_REFUND)),
+    rule: 'late',
+    hoursBeforePickup,
+  };
+}
+
+// The sentence staff read in the refunds queue, and the app shows beforehand.
+export function refundExplanation(due: RefundDue): string {
+  const hours = Math.max(0, Math.round(due.hoursBeforePickup));
+  if (due.rule === 'started') return 'Cancelled after the rental had started — nothing is refundable.';
+  if (due.rule === 'free') {
+    return `Cancelled ${hours} hours before pickup, more than ${FREE_CANCELLATION_HOURS} — a full refund under the cancellation policy.`;
+  }
+  return `Cancelled ${hours} hours before pickup, inside ${FREE_CANCELLATION_HOURS} — half back under the cancellation policy.`;
+}
+
 export async function cancelBooking(
   db: Database,
   actor: Actor,
@@ -291,11 +345,35 @@ export async function cancelBooking(
     .returning();
   if (!booking) throw conflict('already_cancelled', 'That booking is already cancelled.');
 
-  // A deposit that was never taken simply stops being expected.
+  // ONLY A HOLD THAT EXISTED IS RELEASED. A deposit that was never taken stays
+  // "not taken": the two mean different things to a customer — "the hold on
+  // your card has been lifted" against "nothing was ever held" — and marking
+  // both as released left the apps unable to say which.
   await db
     .update(deposits)
     .set({ status: 'released', releasedAt: new Date() })
-    .where(and(eq(deposits.bookingId, booking.id), ne(deposits.status, 'claimed')));
+    .where(and(eq(deposits.bookingId, booking.id), eq(deposits.status, 'held')));
+
+  // WHAT THE CUSTOMER IS OWED. Nothing was refunded here before, so a customer
+  // who cancelled a paid booking was owed money that nothing recorded and
+  // nothing put in front of staff. The request goes into the refunds queue that
+  // the admin panel already has; approving it there is what sends the money
+  // back through Stripe, so one person still decides and it is on the record.
+  if (booking.paymentStatus === 'paid') {
+    const due = refundDue(
+      { startDate: booking.startDate, pickupTime: booking.pickupTime, paidCents: booking.totalDueTodayCents },
+      new Date(),
+    );
+    // The table refuses an amount of zero, which is the right shape for this:
+    // no money owed, no request for anybody to read.
+    if (due.amountCents > 0) {
+      await db.insert(refundRequests).values({
+        bookingId: booking.id,
+        amountCents: due.amountCents,
+        reasonGiven: refundExplanation(due),
+      });
+    }
+  }
 
   await notifier?.bookingCancelled(booking.id);
   return withLinesAndDeposit(db, booking);
@@ -323,3 +401,28 @@ async function withLinesAndDeposit(db: Database, booking: typeof bookings.$infer
 // Kept so a later phase can reuse the shape of a renter without reaching for
 // the whole customer record. See the note on RenterSummary.
 export type CustomerRow = typeof customers.$inferSelect;
+
+// ---- "WHAT DO I GET BACK IF I CANCEL?" ----
+// Read-only, so the cancel page can say the figure before somebody presses the
+// button rather than working it out in the browser from a copy of the policy.
+export async function cancellationTerms(db: Database, actor: Actor, bookingId: string) {
+  const booking = await loadOwnBooking(db, actor, bookingId);
+  const due = refundDue(
+    { startDate: booking.startDate, pickupTime: booking.pickupTime, paidCents: booking.totalDueTodayCents },
+    new Date(),
+  );
+  const [deposit] = await db.select().from(deposits).where(eq(deposits.bookingId, booking.id)).limit(1);
+
+  return {
+    cancellable: booking.status === 'upcoming',
+    // Zero when nothing was paid, which is the true answer either way.
+    refundAmount: booking.paymentStatus === 'paid' ? due.amountCents / 100 : 0,
+    rule: due.rule,
+    explanation: refundExplanation(due),
+    freeUntilHoursBeforePickup: FREE_CANCELLATION_HOURS,
+    // Said separately, because a deposit is not revenue and is given back
+    // whatever the timing.
+    depositHeld: deposit?.status === 'held',
+    depositAmount: (deposit?.amountCents ?? 0) / 100,
+  };
+}

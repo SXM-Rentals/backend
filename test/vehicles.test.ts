@@ -6,8 +6,9 @@
 // never appears. Also checks reviews show a first name and an initial and
 // nothing more.
 
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { bookings, reviews, vehicleAccidentRecords, vehiclePhotos } from '../src/db/schema/index.js';
+import { bookings, providers, reviews, vehicleAccidentRecords, vehiclePhotos } from '../src/db/schema/index.js';
 import {
   createTestContext,
   dateIn,
@@ -259,7 +260,15 @@ describe('rental businesses', () => {
       ].sort(),
     );
 
-    const list = await ctx.app.inject({ method: 'GET', url: '/api/v1/providers', remoteAddress: uniqueIp() });
-    expect(list.json().length).toBeGreaterThan(0);
+    // THE PUBLIC LIST IS CHECKED BUSINESSES ONLY. This one is not verified, so
+    // it is absent from the list — while its own page still answers, because
+    // that is the link a business is given to check its own details.
+    const before = await ctx.app.inject({ method: 'GET', url: '/api/v1/providers', remoteAddress: uniqueIp() });
+    expect(before.json().some((p: { id: string }) => p.id === providerId)).toBe(false);
+
+    // Once staff verify it, it appears.
+    await ctx.db.update(providers).set({ isVerified: true }).where(eq(providers.id, providerId));
+    const after = await ctx.app.inject({ method: 'GET', url: '/api/v1/providers', remoteAddress: uniqueIp() });
+    expect(after.json().some((p: { id: string }) => p.id === providerId)).toBe(true);
   });
 });
