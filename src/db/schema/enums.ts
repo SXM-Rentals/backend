@@ -103,7 +103,21 @@ export const auditAction = pgEnum('audit_action', [
   'business_closed',
   'business_reopened',
   'business_updated',
+  // What a member of staff is allowed to do, changed by somebody senior to them.
+  'staff_tier_changed',
 ]);
+// ---- WHAT A MEMBER OF STAFF IS ALLOWED TO DO ----
+// Highest first. The order here is the hierarchy, and code compares positions in
+// this list, so DO NOT reorder it: nobody may act on an account at their own
+// level or above, which is what stops a tier system being a ladder anybody can
+// climb.
+//
+//   godfather      the owner of the business. Exactly one account, ever.
+//   owner          trusted with the business: everything, plus staff and settings
+//   administrator  the everyday job: verifications, listings, refunds, deposits
+//   viewer         reads everything, changes nothing at all
+export const adminTier = pgEnum('admin_tier', ['godfather', 'owner', 'administrator', 'viewer']);
+
 export const auditSubjectType = pgEnum('audit_subject_type', [
   'customer',
   'provider',

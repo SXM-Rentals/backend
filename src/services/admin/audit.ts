@@ -43,7 +43,9 @@ export type AuditAction =
   // A rental business, acted on by staff rather than by its own owner.
   | 'business_closed'
   | 'business_reopened'
-  | 'business_updated';
+  | 'business_updated'
+  // What a member of staff is allowed to do, changed by somebody senior to them.
+  | 'staff_tier_changed';
 
 export type AuditSubjectType =
   | 'customer'

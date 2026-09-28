@@ -22,6 +22,7 @@ import type { Config } from '../../config.js';
 import type { Database } from '../../db/client.js';
 import { adminSessions, adminStaff } from '../../db/schema/index.js';
 import { decryptSecret, encryptSecret, generateToken, hashToken } from '../../lib/crypto.js';
+import type { AdminTier } from './tiers.js';
 import { AppError, badRequest, conflict, tooManyRequests, unauthorized } from '../../lib/errors.js';
 import {
   getDummyPasswordHash,
@@ -65,6 +66,8 @@ export type AdminActor = {
   // whoever created the account cannot go on acting as them, and "who did this"
   // in the audit log keeps meaning one person.
   mustChangePassword: boolean;
+  // What this account is allowed to do. See services/admin/tiers.ts.
+  tier: AdminTier;
 };
 
 type Logger = { warn: (obj: object, msg: string) => void };
@@ -162,6 +165,11 @@ export function createAdminAuthService(deps: AdminAuthDeps) {
       email: string;
       password: string;
       mustChangePassword?: boolean;
+      // What the account may do. Administrator when not said — the everyday job,
+      // never staff management. `godfather` can be passed here, which is how the
+      // server command makes the one account that exists; nothing reachable over
+      // the web can ask for it (routes/admin/index.ts will not accept the word).
+      tier?: AdminTier;
     }) {
       const email = input.email.trim().toLowerCase();
       const [existing] = await db.select().from(adminStaff).where(eq(adminStaff.email, email)).limit(1);
@@ -182,6 +190,7 @@ export function createAdminAuthService(deps: AdminAuthDeps) {
           avatarInitials: initials || '??',
           passwordHash: await hashPassword(input.password),
           mustChangePassword: input.mustChangePassword ?? false,
+          ...(input.tier ? { tier: input.tier } : {}),
         })
         .returning();
       return staff!;
@@ -419,6 +428,7 @@ export function createAdminAuthService(deps: AdminAuthDeps) {
         email: row.staff.email,
         avatarInitials: row.staff.avatarInitials,
         mustChangePassword: row.staff.mustChangePassword,
+        tier: row.staff.tier,
       };
     },
 

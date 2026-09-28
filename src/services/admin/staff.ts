@@ -34,6 +34,7 @@ import { hashPassword, type BreachedPasswordChecker } from '../../lib/passwords.
 import { isUuid } from '../../lib/ownership.js';
 import type { AdminActor } from './auth.js';
 import { recordAudit } from './audit.js';
+import { assertMayActOn, assertMayGrant, assertNotSelf, TIER_LABELS, type AdminTier } from './tiers.js';
 
 type StaffRow = typeof adminStaff.$inferSelect;
 
@@ -49,6 +50,8 @@ export type StaffRecord = {
   lastSignInAt: string | null;
   createdAt: string;
   disabledAt: string | null;
+  // What this person is allowed to do. See services/admin/tiers.ts.
+  tier: AdminTier;
 };
 
 export function toStaffRecord(staff: StaffRow): StaffRecord {
@@ -63,6 +66,7 @@ export function toStaffRecord(staff: StaffRow): StaffRecord {
     lastSignInAt: staff.lastSignInAt?.toISOString() ?? null,
     createdAt: staff.createdAt.toISOString(),
     disabledAt: staff.disabledAt?.toISOString() ?? null,
+    tier: staff.tier,
   };
 }
 
@@ -74,6 +78,7 @@ type AuthHelpers = {
     email: string;
     password: string;
     mustChangePassword?: boolean;
+    tier?: AdminTier;
   }): Promise<StaffRow>;
   revokeStaffSessions(staffId: string, exceptSessionId?: string): Promise<void>;
   clearFailures(staffId: string): Promise<void>;
@@ -128,7 +133,14 @@ export function createAdminStaffService(deps: AdminStaffServiceDeps) {
     // ---- ADDING SOMEBODY ----
     // They get a temporary password and no authenticator app: they set both up
     // themselves on their first sign-in.
-    async create(actor: AdminActor, input: { name: string; email: string; password: string; reason: string }) {
+    async create(
+      actor: AdminActor,
+      input: { name: string; email: string; password: string; tier: AdminTier; reason: string },
+    ) {
+      // You cannot create somebody at your own level or above — otherwise the
+      // first thing anybody would do is make themselves a colleague who outranks
+      // them and act through that account instead.
+      assertMayGrant(actor, input.tier);
       await assertPasswordAllowed(input.password);
 
       const staff = await auth.createStaff({
@@ -136,6 +148,7 @@ export function createAdminStaffService(deps: AdminStaffServiceDeps) {
         email: input.email,
         password: input.password,
         mustChangePassword: true,
+        tier: input.tier,
       });
 
       await recordAudit(db, {
@@ -146,7 +159,7 @@ export function createAdminStaffService(deps: AdminStaffServiceDeps) {
         subjectLabel: `Staff · ${staff.name}`,
         field: 'Staff account',
         before: 'Did not exist',
-        after: 'Created',
+        after: `Created as ${TIER_LABELS[staff.tier]}`,
         reason: input.reason,
       });
 
@@ -165,6 +178,10 @@ export function createAdminStaffService(deps: AdminStaffServiceDeps) {
       if (staff.id === actor.staffId) {
         throw conflict('cannot_reset_self', 'Use Change password for your own account.');
       }
+      // Nobody resets somebody at their own level or above, and nobody but the
+      // godfather resets the godfather — which is what keeps the business's
+      // owner able to get back in.
+      assertMayActOn(actor, staff);
       await assertPasswordAllowed(input.password);
 
       const [updated] = await db
@@ -199,12 +216,58 @@ export function createAdminStaffService(deps: AdminStaffServiceDeps) {
       return toStaffRecord(updated!);
     },
 
+    // ---- CHANGING WHAT SOMEBODY MAY DO ----
+    // Promoting, demoting, or moving somebody to read-only. Three rules meet
+    // here, and all three are in services/admin/tiers.ts: you cannot act on an
+    // account at your own level or above, you cannot grant a level at or above
+    // your own, and you cannot change your own — whoever you are. The last one
+    // is the difference between a hierarchy and a ladder.
+    async changeTier(actor: AdminActor, id: string, input: { tier: AdminTier; reason: string }) {
+      const staff = await loadStaff(id);
+      assertNotSelf(actor, staff.id, 'access level');
+      assertMayActOn(actor, staff);
+      assertMayGrant(actor, input.tier);
+
+      if (staff.tier === input.tier) {
+        throw conflict('already_that_tier', `${staff.name} is already ${TIER_LABELS[input.tier]}.`);
+      }
+
+      const [updated] = await db
+        .update(adminStaff)
+        .set({ tier: input.tier })
+        .where(eq(adminStaff.id, staff.id))
+        .returning();
+
+      // Their sessions end. The new level applies from their very next request
+      // either way — every request reads it fresh from this row — but the panel
+      // they have open was drawn for the OLD level: an owner's staff screen,
+      // buttons they can no longer use. Signing them out makes the change
+      // unmistakable, and they come back to a panel drawn for what they may do now.
+      await auth.revokeStaffSessions(staff.id);
+
+      await recordAudit(db, {
+        staffId: actor.staffId,
+        action: 'staff_tier_changed',
+        subjectType: 'staff',
+        subjectId: staff.id,
+        subjectLabel: `Staff · ${staff.name}`,
+        field: 'Access level',
+        // In words, so the log reads as a sentence next year.
+        before: TIER_LABELS[staff.tier],
+        after: TIER_LABELS[input.tier],
+        reason: input.reason,
+      });
+
+      return toStaffRecord(updated!);
+    },
+
     // ---- SOMEBODY HAS LEFT ----
     async disable(actor: AdminActor, id: string, input: { reason: string }) {
       const staff = await loadStaff(id);
       if (staff.id === actor.staffId) {
         throw conflict('cannot_disable_self', 'You cannot switch off your own account.');
       }
+      assertMayActOn(actor, staff);
       if (staff.disabledAt) throw conflict('already_disabled', 'That account is already switched off.');
 
       const [updated] = await db
@@ -234,6 +297,7 @@ export function createAdminStaffService(deps: AdminStaffServiceDeps) {
     // Only lifts the block. If they also need a new password, that is a reset.
     async enable(actor: AdminActor, id: string, input: { reason: string }) {
       const staff = await loadStaff(id);
+      assertMayActOn(actor, staff);
       if (!staff.disabledAt) throw conflict('not_disabled', 'That account is not switched off.');
 
       const [updated] = await db

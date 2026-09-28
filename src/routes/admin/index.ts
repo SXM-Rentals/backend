@@ -25,8 +25,10 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { Config } from '../../config.js';
+import { AppError } from '../../lib/errors.js';
 import { parseInput } from '../../lib/validate.js';
 import { adminSessionCookieName, requireAdmin } from '../../middleware/auth.js';
+import { requireTier } from '../../services/admin/tiers.js';
 import { AUTH_LIMITS } from '../../plugins/rate-limit.js';
 import type { AdminAuthService } from '../../services/admin/auth.js';
 import { listAudit } from '../../services/admin/audit.js';
@@ -73,10 +75,22 @@ const newStaffPassword = z
   .min(PASSWORD_MIN_LENGTH, `Passwords need at least ${PASSWORD_MIN_LENGTH} characters.`)
   .max(PASSWORD_MAX_LENGTH, `Passwords can be at most ${PASSWORD_MAX_LENGTH} characters.`);
 
+// Reads. Everything else is a change, and a viewer is refused all of it.
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+// Granting a tier is checked again in the service against who is asking; this
+// only says which words are a tier at all. "godfather" is deliberately absent:
+// it cannot be granted through the panel by anybody.
+const grantableTier = z.enum(['owner', 'administrator', 'viewer']);
+const tierBody = z.object({ tier: grantableTier, reason, code });
+
 const staffCreateBody = z.object({
   name: z.string().trim().min(1).max(120),
   email: z.string().trim().pipe(z.email().max(254)),
   password: newStaffPassword,
+  // What the new account may do. Administrator when not said, which is the
+  // everyday job and never staff management — so adding somebody can never hand
+  // over more than was meant. Checked again against the actor's own level.
+  tier: grantableTier.default('administrator'),
   reason,
   code,
 });
@@ -145,6 +159,21 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     });
   }
 
+  // ---- A VIEWER CHANGES NOTHING ----
+  // Enforced BY METHOD, not by a list of routes: any admin request that is not a
+  // read is refused for a viewer, including addresses added long after this was
+  // written. A list of routes is a list somebody eventually forgets to add to.
+  //
+  // It runs before the handlers, so a viewer never reaches the code that would
+  // have made the change.
+  app.addHook('preHandler', async (request) => {
+    if (READ_METHODS.has(request.method)) return;
+    // Not signed in, or still owed a password: the handlers answer that, in
+    // their own words. This hook is only about what a signed-in viewer may do.
+    if (request.adminActor?.tier !== 'viewer') return;
+    throw new AppError(403, 'read_only', 'Your account can see the panel but not change anything.');
+  });
+
   // Who is asking, having passed both the password and the code.
   const staff = (request: Parameters<typeof requireAdmin>[0]) => requireAdmin(request, config);
 
@@ -211,6 +240,9 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
       email: actor.email,
       avatarInitials: actor.avatarInitials,
       mustChangePassword: actor.mustChangePassword,
+      // What this account may do, so the panel can hide the actions it cannot
+      // use — while the server stays the real barrier.
+      tier: actor.tier,
     };
   });
 
@@ -233,8 +265,14 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   });
 
   // ---- STAFF ACCOUNTS ----
-  // Reading the list is an ordinary staff action. Every CHANGE below also needs
-  // the actor's own authenticator code, checked fresh in the request.
+  // MANAGING STAFF IS OWNER AND ABOVE. An administrator does the everyday job —
+  // verifications, listings, refunds, deposits, disputes — and cannot add a
+  // colleague, reset one, switch one off, or change what anybody may do. Every
+  // change below ALSO needs the actor's own authenticator code, checked fresh in
+  // the request, so a session left open is never enough.
+  //
+  // Reading the list stays an ordinary staff action: the dispute picker needs it,
+  // and knowing who your colleagues are is not a privilege.
   app.get('/staff', async (request) => {
     staff(request);
     const { status } = parseInput(staffListQuery, request.query);
@@ -243,6 +281,7 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
 
   app.post('/staff', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request, reply) => {
     const actor = staff(request);
+    requireTier(actor, 'owner');
     const body = parseInput(staffCreateBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
     const created = await staffAccounts.create(actor, body);
@@ -251,6 +290,7 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
 
   app.post('/staff/:id/reset', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
     const actor = staff(request);
+    requireTier(actor, 'owner');
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(staffResetBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
@@ -259,6 +299,7 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
 
   app.post('/staff/:id/disable', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
     const actor = staff(request);
+    requireTier(actor, 'owner');
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(reasonAndCodeBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
@@ -267,10 +308,25 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
 
   app.post('/staff/:id/enable', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
     const actor = staff(request);
+    requireTier(actor, 'owner');
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(reasonAndCodeBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
     return staffAccounts.enable(actor, id, body);
+  });
+
+  // Promoting, demoting, or moving somebody to read-only. Refused on your own
+  // account whoever you are, on anybody at your own level or above, and for any
+  // level at or above your own — the three rules that keep this a hierarchy
+  // rather than a ladder. Godfather cannot be granted here at all; it moves by a
+  // command on the server.
+  app.post('/staff/:id/tier', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    requireTier(actor, 'owner');
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(tierBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return staffAccounts.changeTier(actor, id, body);
   });
 
   // ---- ANALYTICS ----

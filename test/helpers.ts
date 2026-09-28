@@ -11,6 +11,7 @@ import type { FastifyInstance } from 'fastify';
 import { generate as generateOtp } from 'otplib';
 import { buildApp } from '../src/app.js';
 import { loadConfig, type Config } from '../src/config.js';
+import type { AdminTier } from '../src/services/admin/tiers.js';
 import { createAdminAuthService } from '../src/services/admin/auth.js';
 import { connectPglite, type Database } from '../src/db/client.js';
 import { bookings, customers, providers, vehicles } from '../src/db/schema/index.js';
@@ -297,13 +298,19 @@ export async function signInMobile(ctx: TestContext, email: string, password: st
 export const ADMIN_COOKIE = 'sxm_admin';
 let staffCounter = 0;
 
-export async function createSignedInStaff(ctx: TestContext, name = 'Nadia Charles') {
+export async function createSignedInStaff(
+  ctx: TestContext,
+  name = 'Nadia Charles',
+  // What this staff member may do. Owner by default, because most tests are
+  // about the everyday panel rather than about the tiers themselves.
+  tier: AdminTier = 'owner',
+) {
   staffCounter += 1;
   const email = `staff${staffCounter}@sxmrentals.test`;
   const password = 'a long staff passphrase';
 
   const auth = createAdminAuthService({ db: ctx.db, config: ctx.config, logger: { warn: () => {} } });
-  const staff = await auth.createStaff({ name, email, password });
+  const staff = await auth.createStaff({ name, email, password, tier });
 
   const login = await ctx.app.inject({
     method: 'POST',
@@ -333,7 +340,7 @@ export async function createSignedInStaff(ctx: TestContext, name = 'Nadia Charle
   });
   if (verified.statusCode !== 200) throw new Error(`Two-factor code was refused: ${verified.body}`);
 
-  return { staffId: staff.id, name, email, password, cookie, secret };
+  return { staffId: staff.id, name, email, password, cookie, secret, tier };
 }
 
 // ---- A CUSTOMER, A BUSINESS, A CAR AND A BOOKING ----

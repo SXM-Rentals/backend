@@ -118,7 +118,13 @@ describe('adding a staff member', () => {
     expect(created.body).not.toMatch(/hash|secret/i);
 
     const entries = await ctx.db.select().from(auditLog).where(eq(auditLog.subjectId, created.json().id));
-    expect(entries[0]).toMatchObject({ action: 'staff_created', subjectType: 'staff', after: 'Created' });
+    // The log says what they were created AS. Now that not every account can do
+    // everything, "Created" on its own no longer says enough.
+    expect(entries[0]).toMatchObject({
+      action: 'staff_created',
+      subjectType: 'staff',
+      after: 'Created as Administrator',
+    });
     expect(entries[0]!.reason).toContain('support team');
     // The audit log never records a password or a code.
     expect(JSON.stringify(entries)).not.toContain(TEMP);

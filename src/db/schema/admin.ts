@@ -23,7 +23,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { createdAt, moment, updatedAt } from './columns.js';
-import { auditAction, auditSubjectType, kycProvider, payoutEntity } from './enums.js';
+import { adminTier, auditAction, auditSubjectType, kycProvider, payoutEntity } from './enums.js';
 
 // ---- STAFF ACCOUNTS ----
 // Kept completely apart from customers: a customer account can never become a
@@ -56,10 +56,23 @@ export const adminStaff = pgTable(
     lockedUntil: moment('locked_until'),
     lastSignInAt: moment('last_sign_in_at'),
     disabledAt: moment('disabled_at'),
+    // What this person is allowed to do. New accounts are administrators: the
+    // everyday job, and never staff management, so creating an account can never
+    // hand over more than the person creating it meant to.
+    tier: adminTier('tier').notNull().default('administrator'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('admin_staff_email_unique').on(t.email)],
+  (t) => [
+    uniqueIndex('admin_staff_email_unique').on(t.email),
+    // THERE IS EXACTLY ONE GODFATHER, and the database is what says so rather
+    // than the code alone. A rule enforced only in code is a rule that holds
+    // until somebody writes a script, and this is the account that cannot be
+    // disabled or demoted by anybody else.
+    uniqueIndex('admin_staff_one_godfather')
+      .on(t.tier)
+      .where(sql`${t.tier} = 'godfather'`),
+  ],
 );
 
 // ---- STAFF SIGN-IN SESSIONS ----

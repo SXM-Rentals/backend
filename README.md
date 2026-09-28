@@ -56,6 +56,7 @@ no setup at all. Set `DATABASE_URL` to your own Neon branch to use the real thin
 | `npm run test:watch` | The test suite, re-running as files change |
 | `npm run db:generate` | Writes a new SQL migration after you change `src/db/schema/` |
 | `npm run db:seed` | Fills an empty DEVELOPMENT database with approved businesses and cars |
+| `npm run admin:godfather -- email` | Hands the Godfather role to an existing staff account (server only) |
 | `npm run db:migrate` | Applies any migrations not yet applied |
 | `npm run admin:create` | Makes a staff account for the admin panel |
 | `npm run admin:reset` | The way back in: gives an account a new temporary password, switches it on, clears its lockout |
@@ -219,6 +220,7 @@ Everything lives under `/api/v1`.
 | GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code |
+| POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
 | PATCH | `/admin/providers/:id` | Correct one of its details, with a reason |
 | GET | `/admin/bookings` · `/admin/payments` · `/admin/payouts` | Read-only views across the platform |
 | GET · POST | `/admin/deposits…` | Release a deposit, or keep part of it with a written reason |
