@@ -77,6 +77,7 @@ import {
   getThreadForProvider,
   listThreadsForProvider,
   markReadAsProvider,
+  messageAboutBooking,
   replyAsProvider,
 } from '../../services/messaging/index.js';
 import { toProvider } from '../../services/serializers/vehicles.js';
@@ -157,8 +158,26 @@ const vehicleBody = z.object({
   airConditioning: z.boolean().optional(),
   deliveryAvailable: z.boolean().optional(),
   description: z.string().trim().max(2000).optional(),
+  // What the business declares about the car's past. Sent as the whole list,
+  // because that is how the form shows it. Capped so one car cannot carry a
+  // novel.
+  accidentHistory: z
+    .array(
+      z.object({
+        date: z.iso.date(),
+        description: z.string().trim().min(3).max(500),
+        repaired: z.boolean(),
+      }),
+    )
+    .max(20)
+    .optional(),
 });
-const vehiclePatchBody = vehicleBody.partial();
+// Editing: the same fields, all optional — plus null for a weekly rate, which is
+// how one is taken away. Without it a missing value means "no change", so a rate
+// could be set and never removed.
+const vehiclePatchBody = vehicleBody.partial().extend({
+  weeklyRate: z.number().positive().max(70_000).nullable().optional(),
+});
 // A reply is words, a car to suggest, or both.
 const providerMessageBody = z.object({
   body: z.string().trim().max(4000).optional(),
@@ -342,6 +361,18 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(providerMessageBody, request.body);
     const thread = await replyAsProvider(db, providerId, id, body);
+    return reply.status(201).send(thread);
+  });
+
+  // Writing FIRST, about one of its own bookings — "we are at the Simpson Bay
+  // office, ask for Marie". Until now a business could only reply, so it had to
+  // wait for the renter to write. Tied to a booking of theirs, so a business
+  // cannot open a conversation with any customer it likes.
+  app.post('/me/bookings/:id/messages', async (request, reply) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(providerMessageBody, request.body);
+    const thread = await messageAboutBooking(db, providerId, id, body);
     return reply.status(201).send(thread);
   });
 

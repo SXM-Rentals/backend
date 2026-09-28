@@ -37,6 +37,7 @@ import {
 } from '../../db/schema/index.js';
 import { AppError, conflict, notFound } from '../../lib/errors.js';
 import type { PhotoStorage } from '../../lib/storage.js';
+import { threadIdsForBookings } from '../messaging/index.js';
 import { carSummariesFor, carSummaryFor } from '../summaries/index.js';
 import type { Actor } from '../../lib/ownership.js';
 import { isUuid } from '../../lib/ownership.js';
@@ -259,9 +260,20 @@ export async function getSummary(db: Database, providerId: string) {
   const paidOutCents = payoutRows
     .filter((payout) => payout.status === 'paid')
     .reduce((sum, payout) => sum + payout.amountCents, 0);
-  const pendingCents = payoutRows
-    .filter((payout) => payout.status !== 'paid')
-    .reduce((sum, payout) => sum + payout.amountCents, 0);
+  // ALL THREE FIGURES, FROM THE SAME ROWS. A business shown only the net has no
+  // way to check the deduction was right, which is why the dashboard shows what
+  // the customer paid, what was taken off, and what they receive, together.
+  //
+  // The website used to work the other two out backwards from its own copy of
+  // the commission rate. The day that copy disagreed with the rate the backend
+  // actually charges, the dashboard would have shown a business a commission it
+  // was never charged, and nothing would have looked broken. These come off the
+  // payout rows themselves, which the table already keeps consistent:
+  // gross = amount + commission.
+  const awaiting = payoutRows.filter((payout) => payout.status !== 'paid');
+  const pendingCents = awaiting.reduce((sum, payout) => sum + payout.amountCents, 0);
+  const pendingGrossCents = awaiting.reduce((sum, payout) => sum + payout.grossCents, 0);
+  const pendingCommissionCents = awaiting.reduce((sum, payout) => sum + payout.commissionCents, 0);
 
   const rated = fleet.filter((vehicle) => vehicle.reviewCount > 0);
   const recentBookings = bookingRows.filter((booking) => booking.startDate >= since && booking.status !== 'cancelled');
@@ -270,13 +282,26 @@ export async function getSummary(db: Database, providerId: string) {
     // Their share, after commission. Deposits are never counted here.
     paidOut: paidOutCents / 100,
     pending: pendingCents / 100,
+    // What the customers paid, and what SXM Rentals took, for that same pending
+    // money — so the three subtract exactly on screen.
+    pendingGross: pendingGrossCents / 100,
+    pendingCommission: pendingCommissionCents / 100,
     nextPayoutDate: nextPayoutDate(),
     activeBookings: bookingRows.filter((booking) => booking.status === 'active').length,
     upcomingBookings: bookingRows.filter((booking) => booking.status === 'upcoming').length,
     fleetSize: fleet.length,
     averageRating: rated.length > 0 ? rated.reduce((sum, v) => sum + v.rating, 0) / rated.length : 0,
-    // Enquiries are conversations started with this business. Messaging is not
-    // built yet, so this is 0 rather than a made-up number.
+    // NAMED FOR WHAT THEY ACTUALLY COUNT. These used to be called enquiries and
+    // conversions, and the dashboard divided one by the other — which came out
+    // at 300%, because most bookings never start with a conversation at all.
+    // Counting them is useful; calling the result a conversion rate was not.
+    //
+    // Conversations ever, against bookings in the last 90 days: two different
+    // windows, said out loud in the names rather than left to be discovered.
+    totalConversations: threads?.count ?? 0,
+    bookingsLast90Days: recentBookings.length,
+    // The old names, kept for a release so the apps can move across without
+    // breaking. Remove them once the website and phone app read the ones above.
     totalInquiries: threads?.count ?? 0,
     totalConversions: recentBookings.length,
   };
@@ -335,7 +360,34 @@ export type VehicleInput = {
   airConditioning?: boolean | undefined;
   deliveryAvailable?: boolean | undefined;
   description?: string | undefined;
+  accidentHistory?: AccidentRecordInput[] | undefined;
 };
+
+// What the business declares about the car's past. SXM Rentals does not check
+// it, and the car's page says so.
+//
+// AN EMPTY LIST IS NOT THE SAME AS "NO ACCIDENTS", which is why this could not
+// stay unsettable: every car had an empty history because there was no way to
+// record one, and a customer reads an empty history as a clean one. The car page
+// used to show a green tick for it.
+export type AccidentRecordInput = { date: string; description: string; repaired: boolean };
+
+// The declared history, replaced wholesale rather than merged: the form shows the
+// whole list and sends the whole list back, so anything else would leave behind a
+// row the business thought it had deleted.
+async function replaceAccidentHistory(db: Database, vehicleId: string, records: AccidentRecordInput[]) {
+  await db.delete(vehicleAccidentRecords).where(eq(vehicleAccidentRecords.vehicleId, vehicleId));
+  if (records.length === 0) return;
+  await db.insert(vehicleAccidentRecords).values(
+    records.map((record) => ({
+      vehicleId,
+      // The API calls it "date"; the column is occurred_on.
+      occurredOn: record.date,
+      description: record.description,
+      repaired: record.repaired,
+    })),
+  );
+}
 
 // A new car waits for staff approval before customers can see it.
 export async function addVehicle(db: Database, providerId: string, input: VehicleInput) {
@@ -371,7 +423,17 @@ export async function addVehicle(db: Database, providerId: string, input: Vehicl
           listingStatus: 'pending_review',
         })
         .returning();
-      if (vehicle) return { ...toVehicle(vehicle, [], [], []), listingStatus: vehicle.listingStatus, reference: vehicle.reference };
+      if (vehicle) {
+        if (input.accidentHistory?.length) await replaceAccidentHistory(db, vehicle.id, input.accidentHistory);
+        const accidents = input.accidentHistory?.length
+          ? await db.select().from(vehicleAccidentRecords).where(eq(vehicleAccidentRecords.vehicleId, vehicle.id))
+          : [];
+        return {
+          ...toVehicle(vehicle, [], accidents, []),
+          listingStatus: vehicle.listingStatus,
+          reference: vehicle.reference,
+        };
+      }
     } catch (error) {
       const code = (error as { code?: string; cause?: { code?: string } })?.cause?.code;
       if (code !== '23505') throw error;
@@ -392,30 +454,73 @@ async function loadOwnVehicle(db: Database, providerId: string, vehicleId: strin
   return vehicle;
 }
 
-export type VehiclePatch = Partial<VehicleInput>;
+export type VehiclePatch = Omit<Partial<VehicleInput>, 'weeklyRate'> & {
+  // A number sets it, null takes it away, missing leaves it alone. The three
+  // have to be distinguishable or a weekly rate can never be removed.
+  weeklyRate?: number | null | undefined;
+};
+
+// Fields that say WHICH CAR THIS IS. Changing them would turn one car into
+// another while it kept its reviews, its bookings and its history — so they are
+// refused outright rather than silently ignored, which is what happened before:
+// the request was accepted, answered 200, and changed nothing.
+const FIXED_VEHICLE_FIELDS = ['make', 'model', 'year', 'vehicleClass', 'transmission', 'fuel'] as const;
 
 export async function updateVehicle(db: Database, providerId: string, vehicleId: string, patch: VehiclePatch) {
   const existing = await loadOwnVehicle(db, providerId, vehicleId);
+
+  const fixed = FIXED_VEHICLE_FIELDS.filter((field) => patch[field] !== undefined);
+  if (fixed.length > 0) {
+    throw new AppError(
+      400,
+      'field_not_editable',
+      `A car's ${fixed.join(', ')} cannot be changed — its reviews and past rentals belong to this car. Take it off the platform and add the new one instead.`,
+    );
+  }
+
   const changes = {
     ...(patch.dailyRate !== undefined ? { dailyRateCents: Math.round(patch.dailyRate * 100) } : {}),
-    ...(patch.weeklyRate !== undefined ? { weeklyRateCents: Math.round(patch.weeklyRate * 100) } : {}),
+    // null clears a weekly rate. A missing value means "no change", so without
+    // this there was no way to take one away once it had been set.
+    ...(patch.weeklyRate !== undefined
+      ? { weeklyRateCents: patch.weeklyRate === null ? null : Math.round(patch.weeklyRate * 100) }
+      : {}),
     ...(patch.depositAmount !== undefined ? { depositAmountCents: Math.round(patch.depositAmount * 100) } : {}),
     ...(patch.minimumDays !== undefined ? { minimumDays: patch.minimumDays } : {}),
     ...(patch.maximumDays !== undefined ? { maximumDays: patch.maximumDays } : {}),
     ...(patch.description !== undefined ? { description: patch.description } : {}),
+    // THESE FOUR TRAVEL TOGETHER. A car moved from Simpson Bay to Marigot used to
+    // say Marigot, sit on the map back in Simpson Bay, and still come up under
+    // the Dutch side in search, because only the town was ever saved.
     ...(patch.pickupTown !== undefined ? { pickupTown: patch.pickupTown } : {}),
+    ...(patch.side !== undefined ? { side: patch.side } : {}),
+    ...(patch.latitude !== undefined ? { latitude: patch.latitude } : {}),
+    ...(patch.longitude !== undefined ? { longitude: patch.longitude } : {}),
     ...(patch.deliveryAvailable !== undefined ? { deliveryAvailable: patch.deliveryAvailable } : {}),
     ...(patch.airConditioning !== undefined ? { airConditioning: patch.airConditioning } : {}),
     ...(patch.seats !== undefined ? { seats: patch.seats } : {}),
     ...(patch.doors !== undefined ? { doors: patch.doors } : {}),
     ...(patch.trim !== undefined ? { trim: patch.trim } : {}),
   };
-  if (Object.keys(changes).length === 0) {
-    return { ...toVehicle(existing, [], [], []), listingStatus: existing.listingStatus, reference: existing.reference };
+  if (patch.accidentHistory !== undefined) {
+    await replaceAccidentHistory(db, existing.id, patch.accidentHistory);
   }
 
-  const [updated] = await db.update(vehicles).set(changes).where(eq(vehicles.id, existing.id)).returning();
-  return { ...toVehicle(updated!, [], [], []), listingStatus: updated!.listingStatus, reference: updated!.reference };
+  const [updated] =
+    Object.keys(changes).length > 0
+      ? await db.update(vehicles).set(changes).where(eq(vehicles.id, existing.id)).returning()
+      : [existing];
+  // Answered with what the car now has, rather than an empty list, so the form
+  // shows what it just saved instead of appearing to have lost it.
+  const accidents = await db
+    .select()
+    .from(vehicleAccidentRecords)
+    .where(eq(vehicleAccidentRecords.vehicleId, existing.id));
+  return {
+    ...toVehicle(updated!, [], accidents, []),
+    listingStatus: updated!.listingStatus,
+    reference: updated!.reference,
+  };
 }
 
 // Taking a car off the platform. Refused while somebody is due to collect it:
@@ -509,7 +614,13 @@ export async function listProviderBookings(db: Database, providerId: string) {
     .from(deposits)
     .where(inArray(deposits.bookingId, rows.map((row) => row.booking.id)));
 
-  const cars = await carSummariesFor(db, rows.map((row) => row.booking.vehicleId));
+  const [cars, threads] = await Promise.all([
+    carSummariesFor(db, rows.map((row) => row.booking.vehicleId)),
+    // The conversation about each booking, so the business can open it from the
+    // booking. ProviderBooking has always had a place for this and no caller
+    // ever filled it, so the field was permanently absent.
+    threadIdsForBookings(db, rows.map((row) => row.booking.id)),
+  ]);
 
   return rows.map((row) =>
     toProviderBooking(
@@ -521,6 +632,7 @@ export async function listProviderBookings(db: Database, providerId: string) {
         verificationStatus: row.renter.verificationStatus,
       },
       cars.get(row.booking.vehicleId) ?? null,
+      threads.get(row.booking.id),
     ),
   );
 }
@@ -535,9 +647,10 @@ export async function getProviderBooking(db: Database, providerId: string, booki
     .limit(1);
   if (!row) throw notFound('We could not find that booking.');
 
-  const [[deposit], vehicle] = await Promise.all([
+  const [[deposit], vehicle, threads] = await Promise.all([
     db.select().from(deposits).where(eq(deposits.bookingId, row.booking.id)).limit(1),
     carSummaryFor(db, row.booking.vehicleId),
+    threadIdsForBookings(db, [row.booking.id]),
   ]);
   return toProviderBooking(
     row.booking,
@@ -548,6 +661,7 @@ export async function getProviderBooking(db: Database, providerId: string, booki
       verificationStatus: row.renter.verificationStatus,
     },
     vehicle,
+    threads.get(row.booking.id),
   );
 }
 

@@ -172,6 +172,7 @@ Everything lives under `/api/v1`.
 | GET | `/customers/me` | Your own account, in the apps' `User` shape |
 | POST | `/customers/me/close` | Close your own account for good (asks for the password again) |
 | GET | `/vehicles` | Search and filter cars — every filter the Search screen offers |
+| GET | `/vehicles?providerId=` | One business's cars, for its public page |
 | GET | `/vehicles/:id` | One car, with its photos, declared damage and booked days |
 | GET | `/vehicles/:id/reviews` | Its reviews |
 | GET | `/providers` | The rental businesses |
@@ -181,6 +182,7 @@ Everything lives under `/api/v1`.
 | GET | `/bookings` | Your own bookings |
 | GET | `/bookings/:id` | One of your own bookings |
 | GET | `/bookings/:id/cancellation` | What cancelling now would be worth back, before confirming |
+| POST | `/bookings/:id/agreement` | Agree to the rental terms before pickup |
 | POST | `/bookings/:id/cancel` | Cancel one that has not started |
 | POST | `/payments/bookings/:id/intent` | Start (or resume) paying for a booking |
 | POST | `/deposits/bookings/:id/authorize` | Place the deposit hold on the card |
@@ -206,6 +208,7 @@ Everything lives under `/api/v1`.
 | GET | `/providers/me/bookings/:id` | One of them |
 | GET | `/providers/me/messages` · `/messages/:id` | Conversations with renters |
 | POST | `/providers/me/messages/:id/messages` · `/read` | Reply · mark as read |
+| POST | `/providers/me/bookings/:id/messages` | Write first about one of its bookings |
 | POST | `/providers/me/close` | Close the business: every car comes off the site (owner only) |
 | GET | `/providers/me/payouts` | What SXM Rentals has paid them |
 | GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |

@@ -54,6 +54,60 @@ const post = (url: string, payload: object, headers: Record<string, string> = {}
 const get = (url: string, headers: Record<string, string> = {}) =>
   ctx.app.inject({ method: 'GET', url: `/api/v1${url}`, headers, remoteAddress: uniqueIp() });
 
+describe('signing the rental agreement', () => {
+  it('records that the customer agreed, and is the same however many times they tap', async () => {
+    const created = await post(
+      '/bookings',
+      { vehicleId, startDate: dateIn(200), endDate: dateIn(203) },
+      asCustomer(),
+    );
+    expect(created.statusCode).toBe(201);
+    // A booking has always REPORTED this, and nothing ever set it, so the
+    // booking flow had a step saying the signature could not be recorded.
+    expect(created.json().agreementSigned).toBe(false);
+
+    const signed = await post(`/bookings/${created.json().id}/agreement`, {}, asCustomer());
+    expect(signed.statusCode).toBe(200);
+    expect(signed.json().agreementSigned).toBe(true);
+
+    // Signing twice is a double tap or a reloaded page: the first time stands
+    // rather than being moved to now.
+    const [before] = await ctx.db.select().from(bookings).where(eq(bookings.id, created.json().id));
+    const again = await post(`/bookings/${created.json().id}/agreement`, {}, asCustomer());
+    expect(again.statusCode).toBe(200);
+    const [after] = await ctx.db.select().from(bookings).where(eq(bookings.id, created.json().id));
+    expect(after?.agreementSignedAt?.toISOString()).toBe(before?.agreementSignedAt?.toISOString());
+  });
+
+  it('cannot be signed by anybody but the customer whose booking it is', async () => {
+    const created = await post(
+      '/bookings',
+      { vehicleId, startDate: dateIn(210), endDate: dateIn(213) },
+      asCustomer(),
+    );
+    const other = await createVerifiedAccount(ctx);
+    const stranger = await signInMobile(ctx, other.email, other.password);
+
+    // Not found, not "forbidden" — the same rule as every other booking address.
+    const refused = await post(`/bookings/${created.json().id}/agreement`, {}, asCustomer(stranger));
+    expect(refused.statusCode).toBe(404);
+    expect((await get(`/bookings/${created.json().id}`, asCustomer())).json().agreementSigned).toBe(false);
+  });
+
+  it('is refused on a cancelled booking, because there is nothing to agree to', async () => {
+    const created = await post(
+      '/bookings',
+      { vehicleId, startDate: dateIn(220), endDate: dateIn(223) },
+      asCustomer(),
+    );
+    await post(`/bookings/${created.json().id}/cancel`, {}, asCustomer());
+
+    const refused = await post(`/bookings/${created.json().id}/agreement`, {}, asCustomer());
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.code).toBe('booking_cancelled');
+  });
+});
+
 describe('what a rental costs', () => {
   it('adds up the rental and the 5% service fee, and keeps the deposit outside the total', async () => {
     const res = await post('/bookings/quote', { vehicleId, startDate: dateIn(20), endDate: dateIn(23) });

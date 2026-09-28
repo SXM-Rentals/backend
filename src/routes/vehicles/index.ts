@@ -44,6 +44,10 @@ const searchQuery = z.object({
   fuel: z.enum(['petrol', 'diesel', 'hybrid', 'electric']).optional(),
   deliveryOnly: z.enum(['true', 'false']).optional(),
   side: z.enum(['dutch', 'french']).optional(),
+  // One business's cars, for its public page. Without this the apps fetched
+  // every car on the platform and filtered in the browser, on every visit to
+  // every business page.
+  providerId: z.string().max(64).optional(),
   sort: z.enum(['recommended', 'price_low', 'price_high', 'rating']).default('recommended'),
   // Only show cars actually free for these dates.
   startDate: z.iso.date().optional(),
@@ -86,6 +90,11 @@ export default async function vehicleRoutes(app: FastifyInstance, options: Vehic
     if (filters.transmission) conditions.push(eq(vehicles.transmission, filters.transmission));
     if (filters.fuel) conditions.push(eq(vehicles.fuel, filters.fuel));
     if (filters.deliveryOnly === 'true') conditions.push(eq(vehicles.deliveryAvailable, true));
+    // An id that is not a uuid matches nothing, rather than failing: a bad link
+    // should show an empty page, not an error.
+    if (filters.providerId) {
+      conditions.push(isUuid(filters.providerId) ? eq(vehicles.providerId, filters.providerId) : sql`false`);
+    }
     if (filters.side) conditions.push(eq(vehicles.side, filters.side));
 
     // Free for the dates asked about: no booking of this car overlaps them.

@@ -20,7 +20,7 @@
 // No money moves yet — Stripe arrives in Phase 3. A new booking's deposit is
 // recorded as "not taken" and the booking as "authorized".
 
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   bookingPriceLines,
@@ -333,6 +333,34 @@ export function refundExplanation(due: RefundDue): string {
     return `Cancelled ${hours} hours before pickup, more than ${FREE_CANCELLATION_HOURS} — a full refund under the cancellation policy.`;
   }
   return `Cancelled ${hours} hours before pickup, inside ${FREE_CANCELLATION_HOURS} — half back under the cancellation policy.`;
+}
+
+// ---- SIGNING THE RENTAL AGREEMENT ----
+// The customer's own action, before pickup. A booking has always REPORTED
+// whether the agreement was signed, and nothing ever set it, so the booking flow
+// had a step that said the signature could not be recorded.
+//
+// It is the customer who signs, not the business marking that they did: if a
+// deposit is disputed later, "the renter agreed to these terms at this time from
+// their own account" is worth something, and "the business says they signed" is
+// worth much less.
+export async function signAgreement(db: Database, actor: Actor, bookingId: string): Promise<Booking> {
+  const existing = await loadOwnBooking(db, actor, bookingId);
+  if (existing.status === 'cancelled') {
+    throw conflict('booking_cancelled', 'That booking is cancelled, so there is nothing to agree to.');
+  }
+  // Signing twice is the same as signing once — a double tap, or a page
+  // reloaded — so the first time stands rather than being moved.
+  if (existing.agreementSignedAt) return withLinesAndDeposit(db, existing);
+
+  const [booking] = await db
+    .update(bookings)
+    .set({ agreementSignedAt: new Date() })
+    .where(and(eq(bookings.id, existing.id), eq(bookings.customerId, actor.customerId), isNull(bookings.agreementSignedAt)))
+    .returning();
+  // Somebody signed in the moment between the two queries. Their signature
+  // counts; this one changes nothing.
+  return withLinesAndDeposit(db, booking ?? existing);
 }
 
 export async function cancelBooking(

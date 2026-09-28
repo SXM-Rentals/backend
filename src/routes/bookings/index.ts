@@ -22,11 +22,12 @@ import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
 import {
   cancelBooking,
+  cancellationTerms,
   createBooking,
   getBookingFor,
   listBookingsFor,
   quoteFor,
-  cancellationTerms,
+  signAgreement,
 } from '../../services/booking-engine/index.js';
 import type { NotificationService } from '../../services/notifications/index.js';
 
@@ -101,5 +102,14 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
     return cancelBooking(db, actor, id, notifications);
+  });
+
+  // Agreeing to the rental terms, before pickup. The customer's own action, so
+  // that a disputed deposit later has "the renter agreed at this time from their
+  // own account" behind it rather than the business's word for it.
+  app.post('/:id/agreement', async (request) => {
+    const actor = requireCustomer(request);
+    const { id } = parseInput(idParam, request.params);
+    return signAgreement(db, actor, id);
   });
 }

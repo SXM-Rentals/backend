@@ -286,6 +286,82 @@ export async function replyAsProvider(db: Database, providerId: string, threadId
   return getThreadForProvider(db, providerId, row.thread.id);
 }
 
+// ---- A BUSINESS WRITING FIRST, ABOUT ONE OF ITS BOOKINGS ----
+// Until now only a customer could start a conversation, and a business could only
+// reply. So a business with a booking tomorrow had no way to say "we are at the
+// Simpson Bay office, ask for Marie" until the renter wrote to them first.
+//
+// It is tied to a booking of theirs on purpose. A business cannot open a
+// conversation with any customer it likes — only with somebody who has actually
+// booked one of its cars, about that booking. Writing again continues the same
+// conversation rather than starting a second one.
+export async function messageAboutBooking(
+  db: Database,
+  providerId: string,
+  bookingId: string,
+  input: NewMessage,
+) {
+  const body = assertNotEmpty(input);
+  if (!isUuid(bookingId)) throw notFound('We could not find that booking.');
+
+  // Their own booking, or "not found" — the same rule as everywhere else.
+  const [booking] = await db
+    .select({ id: bookings.id, customerId: bookings.customerId, vehicleId: bookings.vehicleId })
+    .from(bookings)
+    .where(and(eq(bookings.id, bookingId), eq(bookings.providerId, providerId)))
+    .limit(1);
+  if (!booking) throw notFound('We could not find that booking.');
+  await assertVehicleBelongs(db, providerId, input.vehicleId);
+
+  const [existing] = await db
+    .select()
+    .from(chatThreads)
+    .where(and(eq(chatThreads.providerId, providerId), eq(chatThreads.bookingId, booking.id)))
+    .limit(1);
+
+  const thread =
+    existing ??
+    (
+      await db
+        .insert(chatThreads)
+        .values({
+          customerId: booking.customerId,
+          providerId,
+          bookingId: booking.id,
+          // The car being rented, so the conversation names it without being told.
+          vehicleId: input.vehicleId ?? booking.vehicleId,
+        })
+        .returning()
+    )[0]!;
+
+  await db.insert(chatMessages).values({
+    threadId: thread.id,
+    sender: 'provider',
+    body,
+    vehicleId: input.vehicleId,
+  });
+  await db.update(chatThreads).set({ updatedAt: new Date() }).where(eq(chatThreads.id, thread.id));
+
+  return getThreadForProvider(db, providerId, thread.id);
+}
+
+// The conversation about a booking, if there is one, so a business's booking can
+// link straight to it. Batched: one query for a whole list of bookings.
+export async function threadIdsForBookings(db: Database, bookingIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(bookingIds)].filter(Boolean);
+  const found = new Map<string, string>();
+  if (ids.length === 0) return found;
+
+  const rows = await db
+    .select({ id: chatThreads.id, bookingId: chatThreads.bookingId })
+    .from(chatThreads)
+    .where(inArray(chatThreads.bookingId, ids));
+  for (const row of rows) {
+    if (row.bookingId) found.set(row.bookingId, row.id);
+  }
+  return found;
+}
+
 export async function markReadAsProvider(db: Database, providerId: string, threadId: string) {
   const row = await loadProviderThread(db, providerId, threadId);
   await db

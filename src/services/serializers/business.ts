@@ -32,6 +32,16 @@ export function toBusinessProfile(profile: ProfileRow, provider: ProviderRow) {
     fleetSizeBand: profile.fleetSizeBand,
     locations: profile.locations,
     operatingSide: profile.operatingSide,
+    // THE BUSINESS'S OWN CONTACT DETAILS. PATCH has always accepted all three,
+    // and this never returned them — so the profile page could offer to change
+    // an email address it could not show. This is the business looking at its
+    // own record, which is the one place these belong; nothing a CUSTOMER reads
+    // carries them, and nothing a customer reads ever should.
+    contactEmail: profile.contactEmail,
+    ownerName: profile.ownerName,
+    ownerPhone: profile.ownerPhone,
+    // The business line, from the public record so the two cannot disagree.
+    phone: provider.phone,
     // These two are shown on the public page as well, so they are read from
     // the public record — one source, so the two cannot disagree.
     deliversVehicles: provider.deliversVehicles,
