@@ -32,12 +32,15 @@ import {
 import type { NotificationService } from '../../services/notifications/index.js';
 import type { VerificationService } from '../../services/verification/index.js';
 import type { DateChangeService } from '../../services/date-changes/index.js';
+import type { Config } from '../../config.js';
+import { isFeatureOn } from '../../services/capabilities/index.js';
 
 export type BookingRouteOptions = {
   db: Database;
   notifications: NotificationService;
   verification: VerificationService;
   dateChanges: DateChangeService;
+  config: Config;
 };
 
 const newDatesBody = z.object({ startDate: z.iso.date(), endDate: z.iso.date() });
@@ -50,7 +53,10 @@ const cancelBody = z.object({
 // A time of day as the apps send it, e.g. "10:00".
 const timeField = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Please give a time like 10:00.');
 
+// A business's discount code: letters and digits, any case.
+const promoCodeField = z.string().trim().regex(/^[A-Za-z0-9]{1,32}$/, 'A code is letters and digits only.');
 const quoteBody = z.object({
+  promoCode: promoCodeField.optional(),
   vehicleId: z.string().max(64),
   startDate: z.iso.date(),
   endDate: z.iso.date(),
@@ -73,7 +79,11 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
   // deposit comes back beside the total, never inside it.
   app.post('/quote', async (request) => {
     const body = parseInput(quoteBody, request.body);
-    const quote = await quoteFor(db, { ...body, pickupTime: '10:00', returnTime: '10:00' });
+    const quote = await quoteFor(
+      db,
+      { ...body, pickupTime: '10:00', returnTime: '10:00' },
+      isFeatureOn(options.config, 'promotions'),
+    );
     return {
       days: quote.days,
       lines: quote.lines.map((line) => ({
@@ -84,6 +94,9 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
       totalDueToday: quote.totalDueTodayCents / 100,
       depositAmount: quote.depositAmountCents / 100,
       available: quote.available,
+      // What happened to a discount code, when one was typed: applied, or not
+      // and why. The price above already reflects it.
+      promo: quote.promo,
     };
   });
 
@@ -94,7 +107,7 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
     // With identity checks switched on, only an approved customer books. The
     // phone checks too, but only this check cannot be skipped.
     await options.verification.assertMayBook(actor);
-    const booking = await createBooking(db, actor, body, notifications);
+    const booking = await createBooking(db, actor, body, notifications, isFeatureOn(options.config, 'promotions'));
     return reply.status(201).send(booking);
   });
 

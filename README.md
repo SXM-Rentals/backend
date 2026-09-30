@@ -193,7 +193,7 @@ Everything lives under `/api/v1`.
 | GET | `/vehicles/:id/reviews` | Its reviews |
 | GET | `/providers` | The rental businesses |
 | GET | `/providers/:id` | One business's public page |
-| POST | `/bookings/quote` | What a rental would cost, before booking anything |
+| POST | `/bookings/quote` | What a rental would cost, before booking anything (takes a business's `promoCode`) |
 | POST | `/bookings` | Make a booking |
 | GET | `/bookings` | Your own bookings |
 | GET | `/bookings/:id` | One of your own bookings |
@@ -226,6 +226,7 @@ Everything lives under `/api/v1`.
 | GET · POST | `/providers/me/vehicles/:id/photos` | Its photos · record one that was just uploaded |
 | PATCH · DELETE | `/providers/me/vehicles/:id/photos…` | Reorder them (first is the cover) · remove one |
 | GET | `/providers/me/performance` | How each car is doing |
+| GET · POST · PATCH · DELETE | `/providers/me/promotions…` | The business's own discount codes: list, make, pause, delete |
 | GET | `/providers/me/bookings` | Bookings across the fleet |
 | GET | `/providers/me/bookings/:id` | One of them |
 | POST | `/providers/me/bookings/:id/date-changes/:requestId/accept` · `/decline` | Answer a renter's request for new dates |

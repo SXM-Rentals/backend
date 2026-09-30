@@ -50,6 +50,7 @@ import type { PaymentGateway } from '../../lib/stripe.js';
 import { countRentalDays, isVehicleFree, today } from '../availability-engine/index.js';
 import { commissionRateBps, quoteBooking, refundDue } from '../booking-engine/index.js';
 import { isFeatureOn, requireFeature } from '../capabilities/index.js';
+import { discountOfBooking } from '../promotions/index.js';
 import type { PushService } from '../push/index.js';
 
 type RequestRow = typeof dateChangeRequests.$inferSelect;
@@ -220,7 +221,10 @@ export function createDateChangeService(deps: DateChangeServiceDeps) {
     }
 
     const rateBps = await commissionRateBps(db);
-    const quote = quoteBooking(vehicle, { ...dates, collection: booking.collection }, rateBps);
+    // A discount code the booking was made with still applies at the new dates,
+    // as long as the rental is still long enough for it.
+    const discount = await discountOfBooking(db, booking.promotionId, dates);
+    const quote = quoteBooking(vehicle, { ...dates, collection: booking.collection }, rateBps, discount);
     const totalCents = quote.grossCents;
     const differenceCents = totalCents - booking.totalDueTodayCents;
 

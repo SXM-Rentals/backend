@@ -19,7 +19,7 @@
 //    figures a business sees quietly disagree.
 
 import { sql } from 'drizzle-orm';
-import { check, date, index, integer, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, date, index, integer, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { adminStaff } from './admin.js';
 import { createdAt, moment, updatedAt } from './columns.js';
 import {
@@ -68,6 +68,46 @@ export const promoCodes = pgTable(
   ],
 );
 
+// ---- A BUSINESS'S OWN DISCOUNT CODES ----
+// Not the same thing as promo_codes above, which is for codes SXM Rentals itself
+// runs. One of these belongs to one business and only works on its cars. It
+// takes a percentage off the rental — never the deposit — and SXM Rentals'
+// commission is charged on what the renter actually pays, so the business and
+// the platform share the cost in proportion.
+//
+// Deleting one only marks it: bookings that used it keep it, and nobody can use
+// it again. How often it has been used is counted from those bookings (not a
+// stored counter), so a cancelled booking gives its use back by itself.
+export const businessPromotions = pgTable(
+  'business_promotions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    // 4 to 16 letters and digits, stored in capitals.
+    code: text('code').notNull(),
+    percentOff: integer('percent_off').notNull(),
+    // The shortest rental it works for, in days.
+    minDays: integer('min_days'),
+    // Bound the PICKUP date, both included.
+    startsOn: date('starts_on'),
+    endsOn: date('ends_on'),
+    // How many bookings may use it.
+    maxUses: integer('max_uses'),
+    active: boolean('active').notNull().default(true),
+    deletedAt: moment('deleted_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('business_promotions_code_unique').on(t.providerId, t.code).where(sql`${t.deletedAt} is null`),
+    check('business_promotions_percent_range', sql`${t.percentOff} between 5 and 50`),
+    check('business_promotions_dates', sql`${t.startsOn} is null or ${t.endsOn} is null or ${t.endsOn} >= ${t.startsOn}`),
+    check('business_promotions_limits', sql`(${t.minDays} is null or ${t.minDays} >= 1) and (${t.maxUses} is null or ${t.maxUses} >= 1)`),
+  ],
+);
+
 // ---- THE BOOKING ----
 export const bookings = pgTable(
   'bookings',
@@ -104,6 +144,8 @@ export const bookings = pgTable(
     stripePaymentIntentId: text('stripe_payment_intent_id'),
 
     promoCodeId: uuid('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
+    // The business's own discount code used on this booking, if any.
+    promotionId: uuid('promotion_id').references(() => businessPromotions.id, { onDelete: 'set null' }),
     // Which payout covered this booking's share. Empty until the business has
     // been paid for it — which is exactly what stops it being paid for twice.
     payoutId: uuid('payout_id').references(() => payouts.id, { onDelete: 'set null' }),

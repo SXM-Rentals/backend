@@ -49,6 +49,12 @@ import type { PhotoStorage } from '../../lib/storage.js';
 import type { PushService } from '../../services/push/index.js';
 import type { DateChangeService } from '../../services/date-changes/index.js';
 import { addBlock, listBlocks, removeBlock } from '../../services/vehicle-blocks/index.js';
+import {
+  createPromotion,
+  deletePromotion,
+  listPromotions,
+  setPromotionActive,
+} from '../../services/promotions/index.js';
 import { requireFeature } from '../../services/capabilities/index.js';
 import { threadOptionsBody } from '../messages/index.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
@@ -120,6 +126,15 @@ const blockBody = z.object({
   reason: z.enum(['servicing', 'private_hire', 'held_back', 'other']),
 });
 const blockParams = z.object({ id: z.string().max(64), blockId: z.string().max(64) });
+const promotionBody = z.object({
+  code: z.string().trim().regex(/^[A-Za-z0-9]{4,16}$/, 'A code is 4 to 16 letters and digits.'),
+  percentOff: z.number().int().min(5).max(50),
+  minDays: z.number().int().min(1).max(365).optional(),
+  startsOn: z.iso.date().optional(),
+  endsOn: z.iso.date().optional(),
+  maxUses: z.number().int().min(1).max(100_000).optional(),
+});
+const promotionPatchBody = z.object({ active: z.boolean() });
 // Only an address, and only one that storage recognises as this car's — the
 // check that matters happens in the service, not here.
 const photoBody = z.object({ url: z.url().max(500) });
@@ -321,6 +336,36 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { providerId } = await businessFor(request);
     const { id } = parseInput(idParam, request.params);
     return getFleetVehicle(db, providerId, id);
+  });
+
+  // ---- ITS OWN DISCOUNT CODES ----
+  app.get('/me/promotions', async (request) => {
+    requireFeature(config, 'promotions');
+    const { providerId } = await businessFor(request);
+    return listPromotions(db, providerId);
+  });
+
+  app.post('/me/promotions', async (request, reply) => {
+    requireFeature(config, 'promotions');
+    const { providerId } = await businessFor(request);
+    const promotion = await createPromotion(db, providerId, parseInput(promotionBody, request.body));
+    return reply.status(201).send(promotion);
+  });
+
+  app.patch('/me/promotions/:id', async (request) => {
+    requireFeature(config, 'promotions');
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const { active } = parseInput(promotionPatchBody, request.body);
+    return setPromotionActive(db, providerId, id, active);
+  });
+
+  app.delete('/me/promotions/:id', async (request, reply) => {
+    requireFeature(config, 'promotions');
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    await deletePromotion(db, providerId, id);
+    return reply.status(204).send();
   });
 
   // ---- DAYS TAKEN OFF SALE ----

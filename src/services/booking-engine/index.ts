@@ -25,6 +25,7 @@ import type { Database } from '../../db/client.js';
 import {
   bookingPriceLines,
   bookings,
+  businessPromotions,
   deposits,
   platformSettings,
   refundRequests,
@@ -38,6 +39,7 @@ import { toCustomerBooking } from '../serializers/bookings.js';
 import { customerDateChange, latestDateChanges, latestRefunds, refundView } from '../date-changes/index.js';
 import { carSummariesFor, carSummaryFor, providerNameFor, providerNamesFor } from '../summaries/index.js';
 import { countRentalDays, isVehicleFree, today } from '../availability-engine/index.js';
+import { checkPromoCode, normaliseCode } from '../promotions/index.js';
 
 type VehicleRow = typeof vehicles.$inferSelect;
 
@@ -48,6 +50,8 @@ export const DEFAULT_COMMISSION_RATE_BPS = 3000;
 
 export type BookingRequest = {
   vehicleId: string;
+  // A business's discount code the customer typed. See services/promotions.
+  promoCode?: string | undefined;
   startDate: string;
   endDate: string;
   pickupTime: string;
@@ -83,10 +87,14 @@ export async function commissionRateBps(db: Database): Promise<number> {
 }
 
 // ---- WORKING OUT THE PRICE ----
+// A business's discount code that has been checked and applies.
+export type AppliedDiscount = { code: string; percentOff: number };
+
 export function quoteBooking(
   vehicle: VehicleRow,
   input: { startDate: string; endDate: string; collection: 'pickup' | 'delivery' },
   rateBps: number,
+  discount?: AppliedDiscount | null,
 ): PriceQuote {
   const days = countRentalDays(input.startDate, input.endDate);
   const lines: PriceQuote['lines'] = [];
@@ -106,6 +114,16 @@ export function quoteBooking(
       label: `Rental (${singleDays} ${singleDays === 1 ? 'day' : 'days'} x ${money(vehicle.dailyRateCents)})`,
       amountCents: singleDays * vehicle.dailyRateCents,
     });
+  }
+
+  // A DISCOUNT CODE comes off the rental lines only — never delivery, never
+  // the deposit — as a line of its own so the renter sees exactly what it
+  // saved. The service fee below is then worked out on the discounted price,
+  // like everything else here: on what the renter actually pays.
+  if (discount) {
+    const rentalCents = lines.reduce((sum, line) => sum + line.amountCents, 0);
+    const offCents = Math.round((rentalCents * discount.percentOff) / 100);
+    if (offCents > 0) lines.push({ label: `Promotion ${discount.code}`, amountCents: -offCents });
   }
 
   // DELIVERY, WHEN IT WAS ASKED FOR AND THE BUSINESS CHARGES FOR IT. Each
@@ -161,11 +179,37 @@ function assertDatesMakeSense(vehicle: VehicleRow, input: { startDate: string; e
 }
 
 // ---- A PRICE PREVIEW, BEFORE ANYTHING IS BOOKED ----
-export async function quoteFor(db: Database, input: BookingRequest): Promise<PriceQuote & { available: boolean }> {
+export type PromoOutcome = { code: string; applied: boolean; message: string | null };
+
+// What a typed code comes to, for the quote. Never throws: a bad code is a
+// message beside a price, not a failed quote.
+async function promoFor(
+  db: Database,
+  vehicle: VehicleRow,
+  input: BookingRequest,
+  promotionsOn: boolean,
+): Promise<{ outcome: PromoOutcome | null; discount: AppliedDiscount | null }> {
+  if (!input.promoCode) return { outcome: null, discount: null };
+  const code = normaliseCode(input.promoCode);
+  if (!promotionsOn) {
+    return { outcome: { code, applied: false, message: 'Discount codes are not switched on yet.' }, discount: null };
+  }
+  const checked = await checkPromoCode(db, vehicle, code, input);
+  return checked.applied
+    ? { outcome: { code, applied: true, message: null }, discount: checked.discount }
+    : { outcome: { code, applied: false, message: checked.message }, discount: null };
+}
+
+export async function quoteFor(
+  db: Database,
+  input: BookingRequest,
+  promotionsOn = false,
+): Promise<PriceQuote & { available: boolean; promo: PromoOutcome | null }> {
   const vehicle = await loadBookableVehicle(db, input.vehicleId);
   assertDatesMakeSense(vehicle, input);
-  const quote = quoteBooking(vehicle, input, await commissionRateBps(db));
-  return { ...quote, available: await isVehicleFree(db, vehicle.id, input.startDate, input.endDate) };
+  const { outcome, discount } = await promoFor(db, vehicle, input, promotionsOn);
+  const quote = quoteBooking(vehicle, input, await commissionRateBps(db), discount);
+  return { ...quote, available: await isVehicleFree(db, vehicle.id, input.startDate, input.endDate), promo: outcome };
 }
 
 // The short code the customer sees, e.g. SXM-4821.
@@ -187,12 +231,39 @@ export async function createBooking(
   actor: Actor,
   input: BookingRequest,
   notifier?: BookingNotifier,
+  promotionsOn = false,
 ): Promise<Booking> {
   const vehicle = await loadBookableVehicle(db, input.vehicleId);
   assertDatesMakeSense(vehicle, input);
-  const quote = quoteBooking(vehicle, input, await commissionRateBps(db));
+  if (input.promoCode && !promotionsOn) {
+    throw conflict('promo_not_applicable', 'Discount codes are not switched on yet.');
+  }
+  const rateBps = await commissionRateBps(db);
 
   const created = await db.transaction(async (tx) => {
+    // THE CODE, CHECKED AGAIN, with its row locked: two bookings at the same
+    // moment cannot both take its last use. If it no longer applies the booking
+    // is refused — never made quietly at the full price.
+    let promotionId: string | null = null;
+    let discount: AppliedDiscount | null = null;
+    if (input.promoCode) {
+      await tx
+        .select({ id: businessPromotions.id })
+        .from(businessPromotions)
+        .where(
+          and(
+            eq(businessPromotions.providerId, vehicle.providerId),
+            eq(businessPromotions.code, normaliseCode(input.promoCode)),
+          ),
+        )
+        .for('update');
+      const checked = await checkPromoCode(tx, vehicle, input.promoCode, input);
+      if (!checked.applied) throw conflict('promo_not_applicable', checked.message);
+      promotionId = checked.promotion.id;
+      discount = checked.discount;
+    }
+    const quote = quoteBooking(vehicle, input, rateBps, discount);
+
     // Hold the car's row for the rest of this transaction. Two people booking
     // the same car at the same instant now queue up here, and the second one
     // sees the first one's booking in the check below.
@@ -225,6 +296,7 @@ export async function createBooking(
             commissionCents: quote.commissionCents,
             payoutCents: quote.payoutCents,
             totalDueTodayCents: quote.totalDueTodayCents,
+            promotionId,
           })
           .returning();
       } catch (error) {

@@ -113,6 +113,13 @@
       "when": 1790803459598,
       "tag": "0015_business_details",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790803909228,
+      "tag": "0016_business_promotions",
+      "breakpoints": true
     }
   ]
 }
