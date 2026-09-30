@@ -73,6 +73,8 @@ export const promoAudience = pgEnum('promo_audience', ['all', 'local', 'tourist'
 
 // ---- MESSAGES, NOTIFICATIONS, REWARDS, SUPPORT ----
 export const chatSender = pgEnum('chat_sender', ['customer', 'provider']);
+// A call inside the app: still ringing, talking, or how it finished.
+export const callStatus = pgEnum('call_status', ['ringing', 'answered', 'ended', 'missed', 'declined']);
 export const notificationKind = pgEnum('notification_kind', [
   'booking_confirmed',
   'payment',

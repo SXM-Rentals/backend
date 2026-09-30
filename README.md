@@ -215,6 +215,9 @@ Everything lives under `/api/v1`.
 | GET | `/messages/threads` · `/threads/:id` | Your conversations with rental businesses |
 | POST | `/messages/threads` | Start one, or continue an existing one |
 | POST | `/messages/threads/:id/messages` · `/read` | Say something else · mark as read |
+| POST | `/calls` · `/calls/register` | Call the other side of a conversation inside the app (Twilio) · let this phone ring for calls |
+| POST | `/calls/:id/answer` · `/decline` · `/end` | Pick up, turn down, hang up |
+| POST | `/calls/twiml` · `/calls/:id/dial-status` | Twilio asking who to ring, and saying how it finished (signed by Twilio) |
 | PATCH | `/messages/threads/:id` | Mark as unread, pin, mute — your own copy only |
 | POST | `/providers/apply` | Register a rental business |
 | GET · PATCH | `/providers/me` | The business's own record |

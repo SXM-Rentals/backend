@@ -71,6 +71,20 @@ const envSchema = z
     // Identity's own page; costs per check) or "staff" (decided in the admin
     // panel). Staff until the owner says otherwise — it costs nothing.
     IDENTITY_METHOD: z.enum(['stripe', 'staff']).default('staff'),
+    // Twilio, for calls inside the app and sign-in codes by text. Calls need the
+    // account, an API key and its secret, and the TwiML app that routes calls
+    // (whose Voice address is https://<this API>/api/v1/calls/twiml); the push
+    // credentials let a call ring a closed app. Texts need the account and a
+    // sender: a phone number, or a messaging service (MG…). Until they are set,
+    // both answer "not switched on yet".
+    TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
+    TWILIO_AUTH_TOKEN: z.string().min(1).optional(),
+    TWILIO_API_KEY_SID: z.string().min(1).optional(),
+    TWILIO_API_KEY_SECRET: z.string().min(1).optional(),
+    TWILIO_TWIML_APP_SID: z.string().min(1).optional(),
+    TWILIO_PUSH_CREDENTIAL_IOS: z.string().min(1).optional(),
+    TWILIO_PUSH_CREDENTIAL_ANDROID: z.string().min(1).optional(),
+    TWILIO_SMS_FROM: z.string().min(1).optional(),
     // Expo's access token, for sending pushes with "enhanced push security" on.
     // Without it no push is sent, and the app's push switch stays off.
     EXPO_ACCESS_TOKEN: z.string().min(1).optional(),
@@ -131,6 +145,16 @@ export type Config = {
   featuresOff: string[];
   identityMethod: 'stripe' | 'staff';
   expoAccessToken: string | undefined;
+  twilio: {
+    accountSid: string | undefined;
+    authToken: string | undefined;
+    apiKeySid: string | undefined;
+    apiKeySecret: string | undefined;
+    twimlAppSid: string | undefined;
+    pushCredentialIos: string | undefined;
+    pushCredentialAndroid: string | undefined;
+    smsFrom: string | undefined;
+  };
 };
 
 // Turns "a, b ,c" into ["a", "b", "c"], dropping blanks.
@@ -191,5 +215,15 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     featuresOff: splitList(env.FEATURES_OFF),
     identityMethod: env.IDENTITY_METHOD,
     expoAccessToken: env.EXPO_ACCESS_TOKEN,
+    twilio: {
+      accountSid: env.TWILIO_ACCOUNT_SID,
+      authToken: env.TWILIO_AUTH_TOKEN,
+      apiKeySid: env.TWILIO_API_KEY_SID,
+      apiKeySecret: env.TWILIO_API_KEY_SECRET,
+      twimlAppSid: env.TWILIO_TWIML_APP_SID,
+      pushCredentialIos: env.TWILIO_PUSH_CREDENTIAL_IOS,
+      pushCredentialAndroid: env.TWILIO_PUSH_CREDENTIAL_ANDROID,
+      smsFrom: env.TWILIO_SMS_FROM,
+    },
   };
 }

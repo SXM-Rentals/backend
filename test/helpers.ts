@@ -17,6 +17,7 @@ import { connectPglite, type Database } from '../src/db/client.js';
 import { bookings, customers, providers, vehicles } from '../src/db/schema/index.js';
 import type { PhotoStorage } from '../src/lib/storage.js';
 import type { PushSender } from '../src/lib/push.js';
+import type { TwilioClient } from '../src/lib/twilio.js';
 import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
 import { AppError } from '../src/lib/errors.js';
 import type { PaymentGateway, SavedCard, WebhookEvent } from '../src/lib/stripe.js';
@@ -52,6 +53,9 @@ export async function createTestContext(
     // out, nothing is ever sent anywhere.
     partnerSend?: typeof fetch;
     partnerResolve?: (hostname: string) => Promise<string[]>;
+    // A stand-in for Twilio. Left out, it is built from the settings, which
+    // in tests have no keys, so calls and texts answer "not switched on".
+    twilio?: TwilioClient;
   } = {},
 ): Promise<TestContext> {
   const connection = await connectPglite();
@@ -80,6 +84,7 @@ export async function createTestContext(
     // Tests never reach the internet: without a stand-in, any send fails.
     partnerSend: options.partnerSend ?? (async () => { throw new Error('No partner system in tests'); }),
     partnerResolve: options.partnerResolve ?? (async () => ['93.184.216.34']),
+    ...(options.twilio ? { twilio: options.twilio } : {}),
     extend: options.extend,
   });
   await app.ready();

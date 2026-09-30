@@ -18,8 +18,10 @@ export type PushMessage = {
   to: string;
   title: string;
   body: string;
-  // Only where to go when it is tapped — never anything personal.
-  data: { type: string; id: string };
+  // Only where to go when it is tapped — never anything personal. A call also
+  // carries its id and the caller's display name, which the ringing screen
+  // shows; never a phone number.
+  data: { type: string; id: string; callId?: string; from?: string };
 };
 
 // What Expo says straight away about each message, in the same order.

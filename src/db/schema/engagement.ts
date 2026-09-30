@@ -10,7 +10,7 @@ import { boolean, check, index, integer, pgTable, primaryKey, text, uuid } from 
 import { adminStaff } from './admin.js';
 import { bookings } from './bookings.js';
 import { createdAt, moment, updatedAt } from './columns.js';
-import { chatSender, notificationKind, supportInteractionStatus } from './enums.js';
+import { callStatus, chatSender, notificationKind, supportInteractionStatus } from './enums.js';
 import { customers } from './identity.js';
 import { providers } from './providers.js';
 import { vehicles } from './vehicles.js';
@@ -82,6 +82,30 @@ export const chatThreadSettings = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [primaryKey({ columns: [t.threadId, t.customerId, t.side] })],
+);
+
+// ---- CALLS INSIDE THE APP ----
+// Who called whom, in which conversation, and how it went. No audio, and no
+// phone number: the call itself is carried by Twilio and never recorded.
+export const calls = pgTable(
+  'calls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => chatThreads.id, { onDelete: 'cascade' }),
+    // Which side rang, and the person who did.
+    callerSide: chatSender('caller_side').notNull(),
+    callerId: uuid('caller_id')
+      .notNull()
+      .references(() => customers.id, { onDelete: 'cascade' }),
+    status: callStatus('status').notNull().default('ringing'),
+    answeredBy: uuid('answered_by'),
+    answeredAt: moment('answered_at'),
+    endedAt: moment('ended_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('calls_thread_idx').on(t.threadId), index('calls_caller_idx').on(t.callerId, t.createdAt)],
 );
 
 // ---- NOTIFICATIONS ----

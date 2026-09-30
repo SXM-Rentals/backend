@@ -65,6 +65,15 @@ type Feature = {
 };
 
 const stripe = (config: Config) => Boolean(config.stripeSecretKey);
+// Calls need Twilio's account, an API key and the app that routes calls.
+const twilioVoice = (config: Config) =>
+  Boolean(
+    config.twilio.accountSid &&
+      config.twilio.authToken &&
+      config.twilio.apiKeySid &&
+      config.twilio.apiKeySecret &&
+      config.twilio.twimlAppSid,
+  );
 const cloudinary = (config: Config) =>
   Boolean(config.cloudinaryCloudName && config.cloudinaryApiKey && config.cloudinaryApiSecret);
 
@@ -92,7 +101,7 @@ const FEATURES: Record<FeatureName, Feature> = {
   dataExport: { built: true },
   messageOptions: { built: true },
   phoneSignIn: { built: false },
-  calls: { built: false },
+  calls: { built: true, ready: twilioVoice },
 };
 
 // Whether the owner has switched it on. FEATURES is a comma-separated list of

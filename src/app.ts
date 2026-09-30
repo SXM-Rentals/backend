@@ -64,6 +64,9 @@ import { createPaymentService } from './services/payments/index.js';
 import { createStripeGateway, createUnconfiguredGateway, type PaymentGateway } from './lib/stripe.js';
 import { createIntegrationService, type Resolver } from './services/integrations/index.js';
 import partnerRoutes from './routes/partner/index.js';
+import callRoutes from './routes/calls/index.js';
+import { createCallService } from './services/calls/index.js';
+import { createTwilioClient, type TwilioClient } from './lib/twilio.js';
 
 export type AppDependencies = {
   config: Config;
@@ -77,6 +80,8 @@ export type AppDependencies = {
   // The web requests to businesses' own systems, and looking their names up.
   partnerSend?: typeof fetch;
   partnerResolve?: Resolver;
+  // Twilio, for calls and texts. Left out, it is built from the settings.
+  twilio?: TwilioClient;
   // A chance to add extra routes before the app is sealed (used by tests).
   extend?: (app: FastifyInstance) => void | Promise<void>;
 };
@@ -200,6 +205,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // So a test can wait for bookings on their way to a business's system.
   app.decorate('integrations', integrations);
 
+  // Calls inside the app, and sign-in codes by text, both carried by Twilio.
+  const twilio = deps.twilio ?? createTwilioClient(config, app.log);
+  const calls = createCallService({ db, twilio, push });
+
   // Changing a rental's dates, as a request the business answers.
   const dateChanges = createDateChangeService({ db, config, gateway, notifications, push });
 
@@ -235,6 +244,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(messageRoutes, { prefix: '/messages', db, push, config });
       await api.register(paymentRoutes, { prefix: '/payments', payments, config, dateChanges });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
+      await api.register(callRoutes, { prefix: '/calls', config, calls, twilio });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway, verification });
       await api.register(adminRoutes, {
         prefix: '/admin',
