@@ -23,6 +23,7 @@ import { requireCustomer } from '../../middleware/auth.js';
 import {
   cancelBooking,
   cancellationTerms,
+  agreementFor,
   createBooking,
   getBookingFor,
   listBookingsFor,
@@ -46,6 +47,12 @@ export type BookingRouteOptions = {
 };
 
 const newDatesBody = z.object({ startDate: z.iso.date(), endDate: z.iso.date() });
+// Signing the agreement. Everything optional: an empty body signs, as before.
+const agreementBody = z.object({
+  agreementVersion: z.string().trim().min(1).max(60).regex(/^[\w.\-]+$/, 'A version is letters, digits, dots and dashes.').optional(),
+  signature: z.unknown().optional(),
+  platform: z.enum(['ios', 'android', 'web']).optional(),
+});
 const requestParams = z.object({ id: z.string().max(64), requestId: z.string().max(64) });
 // Why somebody cancelled — only these, so the business sees words it can trust.
 const cancelBody = z.object({
@@ -169,6 +176,16 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
   app.post('/:id/agreement', async (request) => {
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
-    return signAgreement(db, actor, id);
+    // The drawing itself is checked in services/booking-engine/signature.ts,
+    // so a bad one is refused as invalid_signature in words, not a generic 400.
+    const body = parseInput(agreementBody, request.body ?? {});
+    return signAgreement(db, actor, id, body, request.ip);
+  });
+
+  // The signed agreement shown back: when, which version, and the drawing.
+  app.get('/:id/agreement', async (request) => {
+    const actor = requireCustomer(request);
+    const { id } = parseInput(idParam, request.params);
+    return agreementFor(db, actor, id);
   });
 }

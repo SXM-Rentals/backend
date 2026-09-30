@@ -198,7 +198,7 @@ Everything lives under `/api/v1`.
 | GET | `/bookings` | Your own bookings |
 | GET | `/bookings/:id` | One of your own bookings |
 | GET | `/bookings/:id/cancellation` | What cancelling now would be worth back, before confirming |
-| POST | `/bookings/:id/agreement` | Agree to the rental terms before pickup |
+| GET · POST | `/bookings/:id/agreement` | Sign the rental agreement before pickup, with a drawn signature · see what was signed |
 | POST | `/bookings/:id/cancel` | Cancel one that has not started, optionally saying why |
 | POST | `/bookings/:id/date-changes/quote` | What new dates would cost or give back, before asking |
 | POST | `/bookings/:id/date-changes` · `/:requestId/withdraw` | Ask the business for new dates · take the request back |
@@ -247,6 +247,7 @@ Everything lives under `/api/v1`.
 | GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
 | POST | `/admin/users/:id/verification` | Decide a customer's identity check, with a reason |
 | GET · POST | `/admin/support…` | Customers' messages to staff, waiting ones first · answer one |
+| GET | `/admin/bookings/:id/agreement` | The signed agreement on a booking, drawing included, for a disputed deposit |
 | GET · POST | `/admin/fleet-requests…` | Businesses asking us to set their fleet up · download a file · mark done |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code |

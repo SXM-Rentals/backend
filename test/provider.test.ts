@@ -214,6 +214,8 @@ describe('bookings across the fleet', () => {
         'vehicle',
         // Any request for new dates — dates and money, nothing about the renter.
         'dateChange',
+        // Signed, when and which version — never the drawing.
+        'agreement',
         'startDate',
         'endDate',
         'pickupTime',

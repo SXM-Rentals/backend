@@ -557,6 +557,11 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     return admin.getBooking(parseInput(idParam, request.params).id);
   });
 
+  app.get('/bookings/:id/agreement', async (request) => {
+    staff(request);
+    return admin.getBookingAgreement(parseInput(idParam, request.params).id);
+  });
+
   // ================= MONEY =================
 
   app.get('/payments', async (request) => {

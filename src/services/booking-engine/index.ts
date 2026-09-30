@@ -24,6 +24,7 @@ import { and, asc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   bookingPriceLines,
+  bookingSignatures,
   bookings,
   businessPromotions,
   deposits,
@@ -40,6 +41,7 @@ import { customerDateChange, latestDateChanges, latestRefunds, refundView } from
 import { carSummariesFor, carSummaryFor, providerNameFor, providerNamesFor } from '../summaries/index.js';
 import { countRentalDays, isVehicleFree, today } from '../availability-engine/index.js';
 import { checkPromoCode, normaliseCode } from '../promotions/index.js';
+import { checkSignature } from './signature.js';
 
 type VehicleRow = typeof vehicles.$inferSelect;
 
@@ -428,23 +430,71 @@ export function refundExplanation(due: RefundDue): string {
 // deposit is disputed later, "the renter agreed to these terms at this time from
 // their own account" is worth something, and "the business says they signed" is
 // worth much less.
-export async function signAgreement(db: Database, actor: Actor, bookingId: string): Promise<Booking> {
+export type AgreementInput = {
+  // The wording agreed to, as the app names it.
+  agreementVersion?: string | undefined;
+  // The drawing, not yet checked. See signature.ts.
+  signature?: unknown;
+  platform?: 'ios' | 'android' | 'web' | undefined;
+};
+
+export async function signAgreement(
+  db: Database,
+  actor: Actor,
+  bookingId: string,
+  // An empty body still signs, as it always has, so an app released before
+  // drawings still books.
+  input: AgreementInput = {},
+  ipAddress?: string,
+): Promise<Booking> {
   const existing = await loadOwnBooking(db, actor, bookingId);
   if (existing.status === 'cancelled') {
     throw conflict('booking_cancelled', 'That booking is cancelled, so there is nothing to agree to.');
   }
   // Signing twice is the same as signing once — a double tap, or a page
-  // reloaded — so the first time stands rather than being moved.
+  // reloaded — so the first time stands rather than being moved, and a second
+  // drawing never replaces the first.
   if (existing.agreementSignedAt) return withLinesAndDeposit(db, existing);
 
-  const [booking] = await db
-    .update(bookings)
-    .set({ agreementSignedAt: new Date() })
-    .where(and(eq(bookings.id, existing.id), eq(bookings.customerId, actor.customerId), isNull(bookings.agreementSignedAt)))
-    .returning();
-  // Somebody signed in the moment between the two queries. Their signature
-  // counts; this one changes nothing.
-  return withLinesAndDeposit(db, booking ?? existing);
+  // Checked before anything is written, so a refused drawing leaves the booking
+  // unsigned and the renter simply signs again.
+  const drawing = input.signature !== undefined ? checkSignature(input.signature) : null;
+  // The server's clock, never one sent by the phone.
+  const signedAt = new Date();
+
+  const booking = await db.transaction(async (tx) => {
+    const [signed] = await tx
+      .update(bookings)
+      .set({ agreementSignedAt: signedAt, agreementVersion: input.agreementVersion ?? null, agreementDrawn: drawing !== null })
+      .where(and(eq(bookings.id, existing.id), eq(bookings.customerId, actor.customerId), isNull(bookings.agreementSignedAt)))
+      .returning();
+    // Somebody signed in the moment between the two queries. Their signature
+    // counts; this one changes nothing.
+    if (!signed) return undefined;
+    if (drawing) {
+      await tx.insert(bookingSignatures).values({
+        bookingId: signed.id,
+        ...drawing,
+        platform: input.platform ?? null,
+        ipAddress: ipAddress ?? null,
+        signedAt,
+      });
+    }
+    return signed;
+  });
+  return withLinesAndDeposit(db, booking ?? (await loadOwnBooking(db, actor, bookingId)));
+}
+
+// ---- THE SIGNED AGREEMENT, SHOWN BACK TO THE RENTER ----
+export async function agreementFor(db: Database, actor: Actor, bookingId: string) {
+  const booking = await loadOwnBooking(db, actor, bookingId);
+  if (!booking.agreementSignedAt) throw notFound('That booking has not been signed yet.');
+  const [drawing] = await db.select().from(bookingSignatures).where(eq(bookingSignatures.bookingId, booking.id)).limit(1);
+  return {
+    signedAt: booking.agreementSignedAt.toISOString(),
+    version: booking.agreementVersion,
+    signature: drawing ? { width: drawing.width, height: drawing.height, strokes: drawing.strokes } : null,
+  };
 }
 
 export async function cancelBooking(

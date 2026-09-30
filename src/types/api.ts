@@ -137,6 +137,10 @@ export type CarSummary = {
   photo: string | null;
 };
 
+// The rental agreement, as a booking reports it: signed, when, which wording, and
+// whether a signature was drawn. The drawing itself is at GET /bookings/:id/agreement.
+export type AgreementSummary = { signedAt: string; version: string | null; drawn: boolean };
+
 export type DateChangeView = {
   id: string;
   startDate: string;
@@ -184,6 +188,8 @@ export type Booking = {
   depositStatus: DepositStatus;
   totalDueToday: number;
   agreementSigned: boolean;
+  // Signed, when, which wording, and whether a signature was drawn.
+  agreement: AgreementSummary | null;
   // "authorized" = not paid yet; "paid"; "failed" = the last attempt failed; "refunded".
   paymentStatus: 'paid' | 'authorized' | 'failed' | 'refunded';
   createdAt: string;
@@ -199,6 +205,8 @@ export type ProviderBooking = {
   vehicle: CarSummary | null;
   dateChange: (DateChangeView & { grossAmount: number; commission: number; netAmount: number }) | null;
   cancellationReason?: string | null;
+  // Signed, when and which version — never the drawing, which is the renter's.
+  agreement: AgreementSummary | null;
   status: BookingStatus;
   renterDisplayName: string;
   renterVerified: boolean;

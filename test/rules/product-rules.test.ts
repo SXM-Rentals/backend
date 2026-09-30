@@ -101,6 +101,8 @@ describe("rule 2: a rental business never sees a customer's contact details", ()
         // The latest request for new dates: dates, money and the business's
         // own note. Nothing about the renter.
         'dateChange',
+        // That the agreement was signed, when and which version — no drawing.
+        'agreement',
         'status',
         'renterDisplayName',
         'renterVerified',

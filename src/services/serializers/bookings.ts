@@ -40,6 +40,14 @@ export type BookingContext = {
   dateChange: ReturnType<typeof customerDateChange> | null;
 };
 
+// That the agreement was signed, when, which wording, and whether a signature
+// was drawn — never the drawing, which only the renter and staff see.
+function agreementSummary(booking: BookingRow) {
+  return booking.agreementSignedAt
+    ? { signedAt: booking.agreementSignedAt.toISOString(), version: booking.agreementVersion, drawn: booking.agreementDrawn }
+    : null;
+}
+
 // Cents to dollars: 4550 → 45.5
 const toAmount = (cents: number) => cents / 100;
 
@@ -97,6 +105,7 @@ export function toCustomerBooking(
     // did not go through — so the app knows whether to offer "Pay for this".
     paymentStatus: booking.paymentStatus,
     agreementSigned: booking.agreementSignedAt !== null,
+    agreement: agreementSummary(booking),
     createdAt: booking.createdAt.toISOString(),
   };
 }
@@ -125,6 +134,8 @@ export function toProviderBooking(
     dateChange,
     // Why the renter cancelled, if they said.
     ...(booking.status === 'cancelled' ? { cancellationReason: booking.cancellationReason } : {}),
+    // Signed, when, and which version. Not the drawing: that is the renter's.
+    agreement: agreementSummary(booking),
     startDate: booking.startDate,
     endDate: booking.endDate,
     pickupTime: booking.pickupTime,

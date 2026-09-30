@@ -19,7 +19,7 @@
 //    figures a business sees quietly disagree.
 
 import { sql } from 'drizzle-orm';
-import { boolean, check, date, index, integer, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, date, index, integer, jsonb, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { adminStaff } from './admin.js';
 import { createdAt, moment, updatedAt } from './columns.js';
 import {
@@ -150,6 +150,11 @@ export const bookings = pgTable(
     // been paid for it — which is exactly what stops it being paid for twice.
     payoutId: uuid('payout_id').references(() => payouts.id, { onDelete: 'set null' }),
     agreementSignedAt: moment('agreement_signed_at'),
+    // Which wording was agreed to, as the app names it (e.g. "2026-09-draft"),
+    // and whether a signature was drawn — the drawing itself is kept apart, in
+    // booking_signatures, because only the renter and staff may see it.
+    agreementVersion: text('agreement_version'),
+    agreementDrawn: boolean('agreement_drawn').notNull().default(false),
     cancelledAt: moment('cancelled_at'),
     // Why the renter cancelled, if they said: plans_changed, found_another_car,
     // flight_changed, price or other. Shown to the business on the booking.
@@ -172,6 +177,28 @@ export const bookings = pgTable(
     check('bookings_dates_in_order', sql`${t.endDate} >= ${t.startDate}`),
   ],
 );
+
+// ---- THE SIGNATURE DRAWN ON THE RENTAL AGREEMENT ----
+// The lines exactly as the app drew them, the box they were drawn in, and the
+// circumstances: the server's time (never the phone's), the platform and the IP
+// address. If a deposit is disputed, "the renter drew this, on this version of
+// the terms, at 14:02, from their own account" is what it is settled on.
+//
+// Seen by the renter and by staff — never by the rental business, which sees
+// only that it was signed, when, and which version. Kept with the booking for as
+// long as the booking is kept, including after the renter closes their account.
+export const bookingSignatures = pgTable('booking_signatures', {
+  bookingId: uuid('booking_id')
+    .primaryKey()
+    .references(() => bookings.id, { onDelete: 'cascade' }),
+  width: integer('width').notNull(),
+  height: integer('height').notNull(),
+  // SVG path data using only M and L, checked strictly before it is stored.
+  strokes: jsonb('strokes').$type<string[]>().notNull(),
+  platform: text('platform'),
+  ipAddress: text('ip_address'),
+  signedAt: moment('signed_at').notNull(),
+});
 
 // ---- REVIEWS ----
 // One review per booking, rated 1 to 5. Tied to a real booking so only people

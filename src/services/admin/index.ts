@@ -29,6 +29,7 @@ import {
   payouts,
   providerBusinessProfiles,
   providers,
+  bookingSignatures,
   fleetRequests,
   refundRequests,
   rewardLedger,
@@ -666,6 +667,30 @@ export function createAdminService(deps: AdminServiceDeps) {
       });
 
       return this.getProvider(provider.id);
+    },
+
+    // The signed agreement on a booking, drawing and all, for a disputed
+    // deposit. Staff are the only people besides the renter who see it.
+    async getBookingAgreement(id: string) {
+      const [booking] = await db
+        .select({
+          id: bookings.id,
+          signedAt: bookings.agreementSignedAt,
+          version: bookings.agreementVersion,
+        })
+        .from(bookings)
+        .where(eq(bookings.id, requireId(id, 'booking')))
+        .limit(1);
+      if (!booking) throw notFound('We could not find that booking.');
+      const [drawing] = await db.select().from(bookingSignatures).where(eq(bookingSignatures.bookingId, booking.id)).limit(1);
+      return {
+        signedAt: booking.signedAt?.toISOString() ?? null,
+        version: booking.version,
+        // Lines only: the panel draws them itself as paths.
+        signature: drawing ? { width: drawing.width, height: drawing.height, strokes: drawing.strokes } : null,
+        platform: drawing?.platform ?? null,
+        ipAddress: drawing?.ipAddress ?? null,
+      };
     },
 
     // ================= VEHICLES =================
