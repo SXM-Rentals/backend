@@ -111,6 +111,8 @@ export const authTokens = pgTable(
       .references(() => customers.id, { onDelete: 'cascade' }),
     purpose: authTokenPurpose('purpose').notNull(),
     tokenHash: text('token_hash').notNull(),
+    // For a change of email only: the address it will become once confirmed.
+    newEmail: text('new_email'),
     expiresAt: moment('expires_at').notNull(),
     usedAt: moment('used_at'),
     createdAt: createdAt(),

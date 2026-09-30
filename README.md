@@ -178,6 +178,13 @@ Everything lives under `/api/v1`.
 | DELETE | `/auth/sessions/:id` | Sign out one of them |
 | GET | `/customers/me` | Your own account, in the apps' `User` shape |
 | GET · PUT | `/customers/me/notification-preferences` | The six things a person chooses to hear about |
+| PATCH | `/customers/me` | Change your name (unless it was checked) or phone number |
+| POST | `/customers/me/email` · `/auth/email/confirm` | Move to a new email address, once it confirms |
+| GET · PUT · DELETE | `/customers/me/saved-cars…` | Saved cars, kept on the account |
+| POST | `/customers/me/export` → `/exports/:token` | Email yourself a one-time link to a copy of your data |
+| GET | `/rewards` | Points, level and history |
+| GET · POST | `/support/conversation` · `/support/messages` | Your conversation with SXM Rentals staff |
+| POST | `/notifications/delete` | Delete notifications, for good |
 | POST · DELETE | `/devices` · `/devices/current` | Register this phone for pushes · stop |
 | POST | `/customers/me/close` | Close your own account for good (asks for the password again) |
 | GET | `/vehicles` | Search and filter cars — every filter the Search screen offers |
@@ -227,6 +234,7 @@ Everything lives under `/api/v1`.
 | GET | `/admin/analytics` | Money, bookings and sign-ups over time (`?months=` or `?from=&to=`) |
 | GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
 | POST | `/admin/users/:id/verification` | Decide a customer's identity check, with a reason |
+| GET · POST | `/admin/support…` | Customers' messages to staff, waiting ones first · answer one |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |

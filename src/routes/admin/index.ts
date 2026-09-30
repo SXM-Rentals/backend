@@ -35,6 +35,7 @@ import { listAudit } from '../../services/admin/audit.js';
 import type { AdminService } from '../../services/admin/index.js';
 import type { AdminStaffService } from '../../services/admin/staff.js';
 import type { VerificationService } from '../../services/verification/index.js';
+import type { SupportService } from '../../services/support/index.js';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../lib/passwords.js';
 import type { Database } from '../../db/client.js';
 
@@ -45,6 +46,7 @@ export type AdminRouteOptions = {
   adminAuth: AdminAuthService;
   staffAccounts: AdminStaffService;
   verification: VerificationService;
+  support: SupportService;
 };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
@@ -60,6 +62,7 @@ const loginBody = z.object({
 const mfaBody = z.object({ code: z.string().trim().min(6).max(10) });
 const decisionBody = z.object({ approve: z.boolean(), reason });
 const reasonOnlyBody = z.object({ reason });
+const supportReplyBody = z.object({ body: z.string().trim().min(1).max(4000) });
 const identityDecisionBody = z.object({
   decision: z.enum(['approved', 'rejected', 'resubmit']),
   reason,
@@ -380,6 +383,27 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(identityDecisionBody, request.body);
     return options.verification.decideByStaff(actor, id, body);
+  });
+
+  // ---- MESSAGES FROM CUSTOMERS ----
+  // Waiting for an answer first. A viewer can read them; answering is a change,
+  // which a viewer cannot make.
+  app.get('/support', async (request) => {
+    staff(request);
+    return options.support.listForStaff();
+  });
+
+  app.get('/support/:id', async (request) => {
+    staff(request);
+    const { id } = parseInput(idParam, request.params);
+    return options.support.conversationForStaff(id);
+  });
+
+  app.post('/support/:id/messages', async (request, reply) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(supportReplyBody, request.body);
+    return reply.status(201).send(await options.support.replyAsStaff(actor, id, body));
   });
 
   app.delete('/users/:id', async (request, reply) => {

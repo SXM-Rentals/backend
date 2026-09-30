@@ -78,6 +78,13 @@
       "when": 1790786530330,
       "tag": "0010_push_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790787334670,
+      "tag": "0011_customer_account",
+      "breakpoints": true
     }
   ]
 }

@@ -16,7 +16,7 @@
 //
 // Push notifications to phones come later: they need Expo credentials.
 
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { bookings, customers, deposits, notifications, vehicles } from '../../db/schema/index.js';
 import type { EmailSender } from '../../lib/email.js';
@@ -369,7 +369,7 @@ export function createNotificationService(deps: NotificationServiceDeps) {
       const rows = await db
         .select()
         .from(notifications)
-        .where(eq(notifications.customerId, actor.customerId))
+        .where(and(eq(notifications.customerId, actor.customerId), isNull(notifications.deletedAt)))
         .orderBy(desc(notifications.sentAt))
         .limit(50);
 
@@ -380,6 +380,8 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         body: row.body,
         sentAt: row.sentAt.toISOString(),
         read: row.readAt !== null,
+        // Which rental it is about, so tapping it can open that rental.
+        bookingId: row.bookingId,
       }));
     },
 
@@ -408,6 +410,18 @@ export function createNotificationService(deps: NotificationServiceDeps) {
           .limit(1);
         if (!exists) throw notFound('We could not find that notification.');
       }
+    },
+
+    // Deleting, and them staying deleted. Marked rather than removed, so a
+    // reminder already sent is never sent again just because it was cleared.
+    // Only ever the person's own; another person's ids simply match nothing.
+    async deleteMany(actor: Actor, ids: string[]) {
+      const own = ids.filter(isUuid);
+      if (own.length === 0) return;
+      await db
+        .update(notifications)
+        .set({ deletedAt: new Date() })
+        .where(and(eq(notifications.customerId, actor.customerId), inArray(notifications.id, own)));
     },
 
     async markAllRead(actor: Actor) {

@@ -73,6 +73,9 @@ export const notifications = pgTable(
     body: text('body').notNull(),
     sentAt: moment('sent_at').notNull().defaultNow(),
     readAt: moment('read_at'),
+    // Deleted by the person. Kept as a mark rather than removed, so a reminder
+    // already sent is never sent again just because its notification was cleared.
+    deletedAt: moment('deleted_at'),
   },
   (t) => [
     index('notifications_customer_idx').on(t.customerId, t.sentAt),

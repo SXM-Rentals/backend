@@ -45,6 +45,11 @@ import providerRoutes from './routes/providers/index.js';
 import vehicleRoutes from './routes/vehicles/index.js';
 import webhookRoutes from './routes/webhooks/index.js';
 import deviceRoutes from './routes/devices/index.js';
+import exportRoutes from './routes/exports/index.js';
+import rewardRoutes from './routes/rewards/index.js';
+import supportRoutes from './routes/support/index.js';
+import { createAccountService } from './services/account/index.js';
+import { createSupportService } from './services/support/index.js';
 import { createDisabledPushSender, createExpoPushSender, type PushSender } from './lib/push.js';
 import { createPushService } from './services/push/index.js';
 import verificationRoutes from './routes/verification/index.js';
@@ -168,6 +173,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     push,
   });
   const payments = createPaymentService({ db, gateway, logger: app.log, notifications });
+  // A customer's own account: rewards, details, saved cars, a copy of their data.
+  const account = createAccountService({
+    db,
+    config,
+    email,
+    brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl, social: config.socialAccounts },
+    logger: app.log,
+  });
+  // Customers talking to SXM Rentals staff.
+  const support = createSupportService({ db, push });
+
   // Identity checks: Stripe Identity or staff, as the owner chooses.
   const verification = createVerificationService({ db, config, gateway, notifications, logger: app.log });
   const admin = createAdminService({ db, gateway, payments });
@@ -186,14 +202,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       });
       // Which features the phone app may show. Public, and the same for everybody.
       await api.register(capabilityRoutes, { prefix: '/capabilities', config });
-      await api.register(authRoutes, { prefix: '/auth', auth, config });
-      await api.register(customerRoutes, { prefix: '/customers', auth, config, push });
+      await api.register(authRoutes, { prefix: '/auth', auth, config, account });
+      await api.register(customerRoutes, { prefix: '/customers', auth, config, push, account });
+      await api.register(rewardRoutes, { prefix: '/rewards', config, account });
+      await api.register(supportRoutes, { prefix: '/support', config, support });
+      await api.register(exportRoutes, { prefix: '/exports', account });
       await api.register(deviceRoutes, { prefix: '/devices', config, push });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
       await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage, push });
       await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification });
       await api.register(verificationRoutes, { prefix: '/verification', config, verification });
-      await api.register(notificationRoutes, { prefix: '/notifications', notifications });
+      await api.register(notificationRoutes, { prefix: '/notifications', notifications, config });
       await api.register(messageRoutes, { prefix: '/messages', db, push });
       await api.register(paymentRoutes, { prefix: '/payments', payments, config });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
@@ -206,6 +225,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         adminAuth,
         staffAccounts,
         verification,
+        support,
       });
       // Later phases register verification, rewards, notifications, ... here.
     },

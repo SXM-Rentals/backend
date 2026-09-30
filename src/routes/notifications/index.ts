@@ -20,8 +20,11 @@ import { z } from 'zod';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
 import type { NotificationService } from '../../services/notifications/index.js';
+import type { Config } from '../../config.js';
+import { requireFeature } from '../../services/capabilities/index.js';
 
-export type NotificationRouteOptions = { notifications: NotificationService };
+export type NotificationRouteOptions = { notifications: NotificationService; config: Config };
+const deleteBody = z.object({ ids: z.array(z.string().max(64)).min(1).max(50) });
 
 const idParam = z.object({ id: z.string().max(64) });
 
@@ -34,6 +37,14 @@ export default async function notificationRoutes(app: FastifyInstance, options: 
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
     await notifications.markRead(actor, id);
+    return reply.status(204).send();
+  });
+
+  app.post('/delete', async (request, reply) => {
+    requireFeature(options.config, 'deleteNotifications');
+    const actor = requireCustomer(request);
+    const { ids } = parseInput(deleteBody, request.body);
+    await notifications.deleteMany(actor, ids);
     return reply.status(204).send();
   });
 

@@ -31,9 +31,10 @@ import { parseInput } from '../../lib/validate.js';
 import { clearSessionCookie, requireCustomer, sessionCookieName } from '../../middleware/auth.js';
 import { AUTH_LIMITS } from '../../plugins/rate-limit.js';
 import type { AuthService } from '../../services/auth/index.js';
+import type { AccountService } from '../../services/account/index.js';
 import type { NewSession } from '../../services/auth/sessions.js';
 
-export type AuthRouteOptions = { auth: AuthService; config: Config };
+export type AuthRouteOptions = { auth: AuthService; config: Config; account: AccountService };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
 // Stray spaces are trimmed before the address is checked.
@@ -108,6 +109,13 @@ export default async function authRoutes(app: FastifyInstance, options: AuthRout
     return reply.status(202).send({
       message: 'Thanks! Please check your inbox for a link to confirm your email address.',
     });
+  });
+
+  // Opening the link sent to a NEW email address. Not behind a sign-in, like
+  // confirming an address at sign-up: the link itself is the proof.
+  app.post('/email/confirm', { config: { rateLimit: AUTH_LIMITS.useLink } }, async (request) => {
+    const { token } = parseInput(tokenOnlyBody, request.body);
+    return options.account.confirmEmailChange(token);
   });
 
   app.post('/verify-email', { config: { rateLimit: AUTH_LIMITS.useLink } }, async (request) => {

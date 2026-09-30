@@ -21,7 +21,14 @@ export const verificationStatus = pgEnum('verification_status', [
   'rejected',
   'resubmit',
 ]);
-export const authTokenPurpose = pgEnum('auth_token_purpose', ['verify_email', 'reset_password']);
+export const authTokenPurpose = pgEnum('auth_token_purpose', [
+  'verify_email',
+  'reset_password',
+  // Moving an account to a new email address, once the new one is confirmed.
+  'change_email',
+  // A one-time link to download a copy of your own data.
+  'data_export',
+]);
 
 // ---- RENTAL BUSINESSES ----
 export const islandSide = pgEnum('island_side', ['dutch', 'french']);
