@@ -127,6 +127,20 @@
       "when": 1790804424576,
       "tag": "0017_fleet_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790804623363,
+      "tag": "0018_fleet_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790804883932,
+      "tag": "0019_booking_systems",
+      "breakpoints": true
     }
   ]
 }

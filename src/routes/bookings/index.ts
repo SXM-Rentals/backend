@@ -33,6 +33,7 @@ import type { NotificationService } from '../../services/notifications/index.js'
 import type { VerificationService } from '../../services/verification/index.js';
 import type { DateChangeService } from '../../services/date-changes/index.js';
 import type { Config } from '../../config.js';
+import type { IntegrationService } from '../../services/integrations/index.js';
 import { isFeatureOn } from '../../services/capabilities/index.js';
 
 export type BookingRouteOptions = {
@@ -41,6 +42,7 @@ export type BookingRouteOptions = {
   verification: VerificationService;
   dateChanges: DateChangeService;
   config: Config;
+  integrations: IntegrationService;
 };
 
 const newDatesBody = z.object({ startDate: z.iso.date(), endDate: z.iso.date() });
@@ -108,6 +110,8 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
     // phone checks too, but only this check cannot be skipped.
     await options.verification.assertMayBook(actor);
     const booking = await createBooking(db, actor, body, notifications, isFeatureOn(options.config, 'promotions'));
+    // The business's own rental software hears about it, if it is connected.
+    options.integrations.bookingChanged(booking.providerId, booking.id, 'booking.created');
     return reply.status(201).send(booking);
   });
 
@@ -132,7 +136,9 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
     const { reason } = parseInput(cancelBody, request.body ?? {});
-    return cancelBooking(db, actor, id, notifications, reason);
+    const cancelled = await cancelBooking(db, actor, id, notifications, reason);
+    options.integrations.bookingChanged(cancelled.providerId, cancelled.id, 'booking.cancelled');
+    return cancelled;
   });
 
   // ---- CHANGING THE DATES ----

@@ -237,6 +237,8 @@ Everything lives under `/api/v1`.
 | PATCH | `/providers/me/messages/:id` | Mark as unread, pin, mute — for this member of the business only |
 | POST | `/providers/me/bookings/:id/messages` | Write first about one of its bookings |
 | POST | `/providers/me/close` | Close the business: every car comes off the site (owner only) |
+| POST | `/providers/me/fleet-requests` · `/:id/files` | "Send it to us": ask staff to set the fleet up · send a file with it (kept private) |
+| GET · POST · PUT | `/providers/me/integration…` | Connect the business's own booking system: status, a new API key, the bookings webhook, disconnect |
 | GET | `/providers/me/payouts` | What SXM Rentals has paid them |
 | GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |
 | POST | `/admin/auth/login` · `/mfa/enroll` · `/mfa/verify` · `/logout` | Staff sign-in, in two steps |
@@ -245,6 +247,7 @@ Everything lives under `/api/v1`.
 | GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
 | POST | `/admin/users/:id/verification` | Decide a customer's identity check, with a reason |
 | GET · POST | `/admin/support…` | Customers' messages to staff, waiting ones first · answer one |
+| GET · POST | `/admin/fleet-requests…` | Businesses asking us to set their fleet up · download a file · mark done |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
@@ -268,9 +271,28 @@ that**; it comes back beside the total.
 
 **The same car cannot be booked twice.** A booking locks the car's record while
 it checks, so two people booking the same days at the same instant cannot both
-succeed — the second gets a clear "just been booked". A rental from the 1st to
+succeed — the second gets a clear "not available". A rental from the 1st to
 the 4th uses the nights of the 1st, 2nd and 3rd, so the 4th is free for the next
-person to collect.
+person to collect. Days a business blocked count as taken too; customers are
+never told which.
+
+### The partner API — `/partner/v1`
+
+A business that runs its own rental software connects it from the app, gets an
+API key (shown once, stored only as a hash), and its software then calls these
+with `Authorization: Bearer sxm_live_…`. It is versioned on its own, outside
+`/api/v1`. The developer guide is served at `/partner/v1/docs`.
+
+| Method | Address | What it does |
+|---|---|---|
+| GET · POST | `/partner/v1/vehicles` | Its cars · add one (waits for staff approval) |
+| PATCH | `/partner/v1/vehicles/:id` | Change its prices |
+| PUT | `/partner/v1/vehicles/:id/unavailable` | The whole list of days it cannot be rented; replaces what was sent before |
+| GET | `/partner/v1/bookings` | Its bookings — no renter contact details |
+
+Each booking made, cancelled or moved is sent back to the business's https
+webhook, signed (see the guide). A webhook can never point at a private
+address: checked when saved, and looked up again before every send.
 
 ---
 

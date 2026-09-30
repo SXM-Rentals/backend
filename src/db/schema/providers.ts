@@ -15,6 +15,7 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
+  customType,
   doublePrecision,
   index,
   integer,
@@ -26,6 +27,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { createdAt, moment, updatedAt } from './columns.js';
 import {
+  fleetRequestStatus,
   islandSide,
   operatingSide,
   payoutAccountStatus,
@@ -62,6 +64,71 @@ export const providers = pgTable('providers', {
   // Only the codes the apps translate, or nothing yet.
   check('providers_responds_in_known', sql`${t.respondsIn} in ('', 'within_hour', 'within_hours', 'within_day')`),
 ]);
+
+// ---- "SEND IT TO US": A BUSINESS ASKING STAFF TO SET ITS FLEET UP ----
+// For records on paper, in a message thread, or in software nobody can export
+// from. Staff answer it from the admin panel.
+export const fleetRequests = pgTable(
+  'fleet_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    requestedBy: uuid('requested_by').references(() => customers.id, { onDelete: 'set null' }),
+    fleetSize: text('fleet_size').notNull(),
+    recordFormat: text('record_format').notNull(),
+    // How the owner would like to be reached, in their own words. The
+    // business's own contact detail, for staff only.
+    contact: text('contact').notNull(),
+    notes: text('notes'),
+    status: fleetRequestStatus('status').notNull().default('waiting'),
+    handledAt: moment('handled_at'),
+    handledByStaffId: uuid('handled_by_staff_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('fleet_requests_status_idx').on(t.status, t.createdAt)],
+);
+
+// The files sent with a request — possibly registration and insurance papers.
+// KEPT IN THE DATABASE, NOT AT ANY WEB ADDRESS: only staff can open them, one
+// at a time, through the admin panel. Small by rule (700 KB each, 5 a request).
+const bytes = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
+export const fleetRequestFiles = pgTable(
+  'fleet_request_files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => fleetRequests.id, { onDelete: 'cascade' }),
+    fileName: text('file_name').notNull(),
+    contentType: text('content_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    content: bytes('content').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('fleet_request_files_request_idx').on(t.requestId)],
+);
+
+// ---- A BUSINESS'S OWN RENTAL SOFTWARE, CONNECTED ----
+// Only a hash of the API key is kept, like a password; the key itself is shown
+// once and never again. lastError set means its system stopped answering.
+export const providerIntegrations = pgTable(
+  'provider_integrations',
+  {
+    providerId: uuid('provider_id')
+      .primaryKey()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    apiKeyHash: text('api_key_hash'),
+    apiKeyLast4: text('api_key_last4'),
+    webhookUrl: text('webhook_url'),
+    lastSyncedAt: moment('last_synced_at'),
+    lastError: text('last_error'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('provider_integrations_key_unique').on(t.apiKeyHash)],
+);
 
 // ---- THE PRIVATE HALF ----
 export const providerBusinessProfiles = pgTable('provider_business_profiles', {

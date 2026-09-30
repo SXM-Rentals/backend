@@ -51,6 +51,9 @@ export const listingStatus = pgEnum('listing_status', ['live', 'pending_review',
 export const vehicleDocumentKind = pgEnum('vehicle_document_kind', ['registration', 'insurance', 'roadworthiness']);
 export const documentReviewStatus = pgEnum('document_review_status', ['pending', 'approved', 'rejected']);
 // Why a business took a car off sale for some days. Never shown to customers.
+// A business asking staff to set its fleet up: waiting for staff, or done.
+export const fleetRequestStatus = pgEnum('fleet_request_status', ['waiting', 'done']);
+export const vehicleBlockSource = pgEnum('vehicle_block_source', ['business', 'partner']);
 export const vehicleBlockReason = pgEnum('vehicle_block_reason', ['servicing', 'private_hire', 'held_back', 'other']);
 
 // ---- BOOKINGS AND MONEY ----

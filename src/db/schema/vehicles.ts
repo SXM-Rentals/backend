@@ -28,6 +28,7 @@ import { createdAt, moment, updatedAt } from './columns.js';
 import {
   documentReviewStatus,
   vehicleBlockReason,
+  vehicleBlockSource,
   fuelType,
   islandSide,
   listingStatus,
@@ -166,6 +167,8 @@ export const vehicleBlocks = pgTable(
     startDate: date('start_date').notNull(),
     endDate: date('end_date').notNull(),
     reason: vehicleBlockReason('reason').notNull(),
+    // Made by hand in the app, or sent by the business's own rental software.
+    source: vehicleBlockSource('source').notNull().default('business'),
     createdAt: createdAt(),
   },
   (t) => [

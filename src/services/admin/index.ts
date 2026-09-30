@@ -29,6 +29,7 @@ import {
   payouts,
   providerBusinessProfiles,
   providers,
+  fleetRequests,
   refundRequests,
   rewardLedger,
   vehicleDocuments,
@@ -250,7 +251,7 @@ export function createAdminService(deps: AdminServiceDeps) {
     // The three queues flattened into one list, oldest first, so staff can work
     // top to bottom instead of checking three screens and forgetting the third.
     async getQueue() {
-      const [pendingProviders, pendingDocuments, openDisputes, pendingRefunds] = await Promise.all([
+      const [pendingProviders, pendingDocuments, openDisputes, pendingRefunds, waitingFleetRequests] = await Promise.all([
         db
           .select({ id: providers.id, name: providers.businessName, at: providers.createdAt })
           .from(providers)
@@ -267,6 +268,11 @@ export function createAdminService(deps: AdminServiceDeps) {
           .select({ id: refundRequests.id, amountCents: refundRequests.amountCents, at: refundRequests.requestedAt })
           .from(refundRequests)
           .where(eq(refundRequests.status, 'pending')),
+        db
+          .select({ id: fleetRequests.id, at: fleetRequests.createdAt, name: providers.businessName })
+          .from(fleetRequests)
+          .innerJoin(providers, eq(providers.id, fleetRequests.providerId))
+          .where(eq(fleetRequests.status, 'waiting')),
       ]);
 
       const items = [
@@ -305,6 +311,15 @@ export function createAdminService(deps: AdminServiceDeps) {
           waitingSince: refund.at.toISOString(),
           href: `/payments/refunds`,
           urgency: urgencyFor(refund.at),
+        })),
+        ...waitingFleetRequests.map((request) => ({
+          id: request.id,
+          kind: 'fleet_request' as const,
+          title: `Fleet to set up — ${request.name}`,
+          detail: 'A business asked us to add its cars for it.',
+          waitingSince: request.at.toISOString(),
+          href: `/fleet-requests/${request.id}`,
+          urgency: urgencyFor(request.at),
         })),
       ];
 

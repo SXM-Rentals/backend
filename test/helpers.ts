@@ -48,6 +48,10 @@ export async function createTestContext(
     storage?: PhotoStorage;
     // A stand-in for Expo's push service. Left out, nothing is pushed.
     pushSender?: PushSender;
+    // Stand-ins for a business's own system and for looking names up. Left
+    // out, nothing is ever sent anywhere.
+    partnerSend?: typeof fetch;
+    partnerResolve?: (hostname: string) => Promise<string[]>;
   } = {},
 ): Promise<TestContext> {
   const connection = await connectPglite();
@@ -73,6 +77,9 @@ export async function createTestContext(
     payments: gateway,
     ...(options.storage ? { storage: options.storage } : {}),
     ...(options.pushSender ? { pushSender: options.pushSender } : {}),
+    // Tests never reach the internet: without a stand-in, any send fails.
+    partnerSend: options.partnerSend ?? (async () => { throw new Error('No partner system in tests'); }),
+    partnerResolve: options.partnerResolve ?? (async () => ['93.184.216.34']),
     extend: options.extend,
   });
   await app.ready();

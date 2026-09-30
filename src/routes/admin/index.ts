@@ -36,6 +36,12 @@ import type { AdminService } from '../../services/admin/index.js';
 import type { AdminStaffService } from '../../services/admin/staff.js';
 import type { VerificationService } from '../../services/verification/index.js';
 import type { SupportService } from '../../services/support/index.js';
+import {
+  fleetRequestFile,
+  getFleetRequest,
+  listFleetRequests,
+  markFleetRequestDone,
+} from '../../services/fleet-requests/index.js';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../lib/passwords.js';
 import type { Database } from '../../db/client.js';
 
@@ -151,6 +157,8 @@ const analyticsQuery = z.object({
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
 });
+const fleetRequestQuery = z.object({ status: z.enum(['waiting', 'done']).optional() });
+const fleetFileParams = z.object({ id: z.string().max(64), fileId: z.string().max(64) });
 const resolveBody = z.object({ notes: z.string().trim().min(3).max(4000), reason });
 const listQuery = z.object({
   search: z.string().trim().max(120).optional(),
@@ -394,6 +402,40 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   // ---- MESSAGES FROM CUSTOMERS ----
   // Waiting for an answer first. A viewer can read them; answering is a change,
   // which a viewer cannot make.
+  // ---- "SEND IT TO US" REQUESTS ----
+  // Waiting ones first, oldest first. The files are private: listed here by
+  // name, and only handed over one at a time as a download.
+  app.get('/fleet-requests', async (request) => {
+    staff(request);
+    const { status } = parseInput(fleetRequestQuery, request.query);
+    return listFleetRequests(db, status);
+  });
+
+  app.get('/fleet-requests/:id', async (request) => {
+    staff(request);
+    const { id } = parseInput(idParam, request.params);
+    return getFleetRequest(db, id);
+  });
+
+  app.get('/fleet-requests/:id/files/:fileId', async (request, reply) => {
+    staff(request);
+    const { id, fileId } = parseInput(fleetFileParams, request.params);
+    const file = await fleetRequestFile(db, id, fileId);
+    return reply
+      .header('content-type', file.contentType)
+      // Always a download, never shown inside the panel.
+      .header('content-disposition', `attachment; filename="${file.fileName}"`)
+      .header('x-content-type-options', 'nosniff')
+      .header('cache-control', 'private, no-store')
+      .send(file.content);
+  });
+
+  app.post('/fleet-requests/:id/done', async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    return markFleetRequestDone(db, id, actor.staffId);
+  });
+
   app.get('/support', async (request) => {
     staff(request);
     return options.support.listForStaff();

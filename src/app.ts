@@ -62,6 +62,8 @@ import { createAuthService } from './services/auth/index.js';
 import { createNotificationService } from './services/notifications/index.js';
 import { createPaymentService } from './services/payments/index.js';
 import { createStripeGateway, createUnconfiguredGateway, type PaymentGateway } from './lib/stripe.js';
+import { createIntegrationService, type Resolver } from './services/integrations/index.js';
+import partnerRoutes from './routes/partner/index.js';
 
 export type AppDependencies = {
   config: Config;
@@ -72,6 +74,9 @@ export type AppDependencies = {
   payments?: PaymentGateway;
   storage?: PhotoStorage;
   pushSender?: PushSender;
+  // The web requests to businesses' own systems, and looking their names up.
+  partnerSend?: typeof fetch;
+  partnerResolve?: Resolver;
   // A chance to add extra routes before the app is sealed (used by tests).
   extend?: (app: FastifyInstance) => void | Promise<void>;
 };
@@ -185,6 +190,16 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Customers talking to SXM Rentals staff.
   const support = createSupportService({ db, push });
 
+  // A business's own rental software: its API key, and the bookings sent to it.
+  const integrations = createIntegrationService({
+    db,
+    ...(deps.partnerSend ? { send: deps.partnerSend } : {}),
+    ...(deps.partnerResolve ? { resolve: deps.partnerResolve } : {}),
+    logger: app.log,
+  });
+  // So a test can wait for bookings on their way to a business's system.
+  app.decorate('integrations', integrations);
+
   // Changing a rental's dates, as a request the business answers.
   const dateChanges = createDateChangeService({ db, config, gateway, notifications, push });
 
@@ -213,8 +228,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(exportRoutes, { prefix: '/exports', account });
       await api.register(deviceRoutes, { prefix: '/devices', config, push });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
-      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage, push, dateChanges });
-      await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification, dateChanges, config });
+      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage, push, dateChanges, integrations });
+      await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification, dateChanges, config, integrations });
       await api.register(verificationRoutes, { prefix: '/verification', config, verification });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications, config });
       await api.register(messageRoutes, { prefix: '/messages', db, push, config });
@@ -235,6 +250,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     },
     { prefix: '/api/v1' },
   );
+
+  // The partner API: called by businesses' own rental software with an API key,
+  // outside /api/v1 because it is versioned on its own.
+  await app.register(partnerRoutes, { prefix: '/partner/v1', db, config, integrations });
 
   if (deps.extend) await deps.extend(app);
   return app;

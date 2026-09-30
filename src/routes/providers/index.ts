@@ -37,7 +37,7 @@
 // so there is no business id to tamper with. A business asking for another
 // business's car or booking is told it does not exist.
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Config } from '../../config.js';
@@ -50,6 +50,8 @@ import type { PushService } from '../../services/push/index.js';
 import type { DateChangeService } from '../../services/date-changes/index.js';
 import { addBlock, listBlocks, removeBlock } from '../../services/vehicle-blocks/index.js';
 import { confirmImport, importTemplateCsv, readImport } from '../../services/fleet-import/index.js';
+import { addFleetRequestFile, createFleetRequest } from '../../services/fleet-requests/index.js';
+import type { IntegrationService } from '../../services/integrations/index.js';
 import {
   createPromotion,
   deletePromotion,
@@ -106,6 +108,7 @@ export type ProviderRouteOptions = {
   storage: PhotoStorage;
   push: PushService;
   dateChanges: DateChangeService;
+  integrations: IntegrationService;
 };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
@@ -142,6 +145,13 @@ const uploadBody = z.object({
   contentBase64: z.string().min(1).max(1_000_000),
 });
 const importParams = z.object({ importId: z.string().max(64) });
+const webhookBody = z.object({ url: z.string().trim().min(8).max(500) });
+const fleetRequestBody = z.object({
+  fleetSize: z.enum(['1-5', '6-10', '11-25', '26-50', '50+']),
+  recordFormat: z.enum(['spreadsheet', 'software', 'paper', 'scattered']),
+  contact: z.string().trim().min(3).max(200),
+  notes: z.string().trim().max(2000).optional(),
+});
 const confirmBody = z.object({ rowNumbers: z.array(z.number().int().min(1).max(100_000)).min(1).max(200) });
 // Only an address, and only one that storage recognises as this car's — the
 // check that matters happens in the service, not here.
@@ -188,8 +198,9 @@ const profilePatchBody = z.object({
   side: z.enum(['dutch', 'french']).optional(),
 });
 
-// Prices arrive in dollars, the way they are typed on the form.
-const vehicleBody = z.object({
+// Prices arrive in dollars, the way they are typed on the form. The partner
+// API takes the same fields.
+export const vehicleBody = z.object({
   make: z.string().trim().min(1).max(60),
   model: z.string().trim().min(1).max(60),
   year: z.number().int().min(1950).max(new Date().getFullYear() + 2),
@@ -372,6 +383,63 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     return reply.status(201).send(await confirmImport(db, providerId, importId, rowNumbers));
   });
 
+  // ---- ITS OWN BOOKING SYSTEM ----
+  // The API's own address, for the partner API and its guide.
+  const apiBase = (request: FastifyRequest) => `${request.protocol}://${request.host}`;
+
+  // Making a key or disconnecting needs the owner, and their password again.
+  const ownerWithPassword = async (request: FastifyRequest) => {
+    const actor = requireCustomer(request);
+    const { providerId, role } = await requireProviderFor(db, actor);
+    if (role !== 'owner') throw new AppError(403, 'owner_only', 'Only the owner can connect or disconnect a booking system.');
+    const { password } = parseInput(closeBody, request.body);
+    await assertOwnPassword(db, actor.customerId, password);
+    return providerId;
+  };
+
+  app.get('/me/integration', async (request) => {
+    requireFeature(config, 'bookingSystem');
+    const { providerId } = await businessFor(request);
+    return options.integrations.get(providerId, apiBase(request));
+  });
+
+  app.post('/me/integration/key', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request, reply) => {
+    requireFeature(config, 'bookingSystem');
+    const providerId = await ownerWithPassword(request);
+    return reply.status(201).send(await options.integrations.newKey(providerId));
+  });
+
+  app.put('/me/integration/webhook', async (request) => {
+    requireFeature(config, 'bookingSystem');
+    const { providerId } = await businessFor(request);
+    const { url } = parseInput(webhookBody, request.body);
+    return options.integrations.setWebhook(providerId, url, apiBase(request));
+  });
+
+  app.post('/me/integration/disconnect', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    requireFeature(config, 'bookingSystem');
+    const providerId = await ownerWithPassword(request);
+    return options.integrations.disconnect(providerId, apiBase(request));
+  });
+
+  // ---- "SEND IT TO US" ----
+  app.post('/me/fleet-requests', async (request, reply) => {
+    requireFeature(config, 'uploadRequest');
+    const actor = requireCustomer(request);
+    const { providerId } = await businessFor(request);
+    const created = await createFleetRequest(db, providerId, actor.customerId, parseInput(fleetRequestBody, request.body));
+    return reply.status(201).send(created);
+  });
+
+  // One file at a time, so no single request is large.
+  app.post('/me/fleet-requests/:id/files', { bodyLimit: 1_100_000 }, async (request, reply) => {
+    requireFeature(config, 'uploadRequest');
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const saved = await addFleetRequestFile(db, providerId, id, parseInput(uploadBody, request.body));
+    return reply.status(201).send(saved);
+  });
+
   // ---- ITS OWN DISCOUNT CODES ----
   app.get('/me/promotions', async (request) => {
     requireFeature(config, 'promotions');
@@ -535,6 +603,7 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { providerId } = await businessFor(request);
     const { id, requestId } = parseInput(dateChangeParams, request.params);
     await options.dateChanges.accept(providerId, id, requestId);
+    options.integrations.bookingChanged(providerId, id, 'booking.dates_changed');
     return getProviderBooking(db, providerId, id);
   });
 
