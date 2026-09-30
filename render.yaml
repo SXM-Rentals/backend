@@ -119,3 +119,9 @@ services:
       # Addresses allowed to reach the admin panel. Leave unset for none.
       - key: ADMIN_IP_ALLOWLIST
         sync: false
+      # Which features the phone app may show: comma separated names, or
+      # "all". Changing it needs no new app release — that is the point.
+      - key: FEATURES
+        sync: false
+      - key: FEATURES_OFF
+        sync: false

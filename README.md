@@ -97,6 +97,7 @@ readable list, if any are wrong — and production is stricter: it requires
 | `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
 | `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
 | `CURRENCY` | What bookings are charged in (`usd`) |
+| `FEATURES` · `FEATURES_OFF` | Which features the phone app may show — names, or `all`. A feature also has to be built and set up. See `GET /capabilities` |
 
 Never put a real secret in `.env.example` or anywhere else git can see.
 
@@ -160,6 +161,7 @@ Everything lives under `/api/v1`.
 | Method | Address | What it does |
 |---|---|---|
 | GET | `/health` | Is the API up and can it reach the database |
+| GET | `/capabilities` | Which features are switched on — only `true` and `false`, public |
 | POST | `/auth/signup` | Create an account; a confirmation link is emailed |
 | POST | `/auth/verify-email` | Confirm the email with the link's code |
 | POST | `/auth/verify-email/resend` | Send a new confirmation link |

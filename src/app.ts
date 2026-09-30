@@ -35,6 +35,7 @@ import { registerSecurityHeaders } from './plugins/security-headers.js';
 import adminRoutes from './routes/admin/index.js';
 import authRoutes from './routes/auth/index.js';
 import bookingRoutes from './routes/bookings/index.js';
+import capabilityRoutes from './routes/capabilities/index.js';
 import customerRoutes from './routes/customers/index.js';
 import depositRoutes from './routes/deposits/index.js';
 import messageRoutes from './routes/messages/index.js';
@@ -163,6 +164,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         await db.execute(sql`select 1`);
         return { status: 'ok' };
       });
+      // Which features the phone app may show. Public, and the same for everybody.
+      await api.register(capabilityRoutes, { prefix: '/capabilities', config });
       await api.register(authRoutes, { prefix: '/auth', auth, config });
       await api.register(customerRoutes, { prefix: '/customers', auth, config });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });

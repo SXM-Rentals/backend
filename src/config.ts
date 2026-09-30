@@ -60,6 +60,13 @@ const envSchema = z
     // to see each visitor's real address for rate limiting. 0 = none.
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+    // Which features the phone app may show, comma separated, or "all". A
+    // feature also has to be built and set up before it counts as on — see
+    // services/capabilities. Empty means none, which is safe: the app shows
+    // "not connected yet" for everything.
+    FEATURES: z.string().default(''),
+    // Names taken back out of "all", for switching one feature off in a hurry.
+    FEATURES_OFF: z.string().default(''),
   })
   // Production has stricter rules than a developer's laptop.
   .superRefine((env, ctx) => {
@@ -112,6 +119,9 @@ export type Config = {
   currency: string;
   trustProxyHops: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
+  // The owner's feature switches. See services/capabilities.
+  featuresOn: 'all' | string[];
+  featuresOff: string[];
 };
 
 // Turns "a, b ,c" into ["a", "b", "c"], dropping blanks.
@@ -168,5 +178,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     currency: env.CURRENCY.toLowerCase(),
     trustProxyHops: env.TRUST_PROXY_HOPS,
     logLevel: env.LOG_LEVEL,
+    featuresOn: env.FEATURES.trim().toLowerCase() === 'all' ? 'all' : splitList(env.FEATURES),
+    featuresOff: splitList(env.FEATURES_OFF),
   };
 }
