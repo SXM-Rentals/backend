@@ -5,6 +5,16 @@
 //
 //   POST /payments/bookings/:id/intent   start (or resume) paying for a booking
 //
+//   GET    /payments/methods              the customer's saved cards
+//   POST   /payments/methods/setup        a secret for saving a new one
+//   DELETE /payments/methods/:id          forget one
+//   POST   /payments/methods/:id/default  make one the default
+//
+// Saved cards live at Stripe. The app is told the brand, the last four digits
+// and the expiry, and never more; a card is saved through Stripe's own form, in
+// "save" mode, with the setup secret. They are only offered while the owner has
+// switched paymentMethods on — see services/capabilities.
+//
 // The response contains a one-time "client secret". The app hands that to
 // Stripe's own card form, so the card number goes straight from the customer's
 // device to Stripe and never passes through this server — which is what keeps
@@ -15,11 +25,13 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { Config } from '../../config.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
+import { requireFeature } from '../../services/capabilities/index.js';
 import type { PaymentService } from '../../services/payments/index.js';
 
-export type PaymentRouteOptions = { payments: PaymentService };
+export type PaymentRouteOptions = { payments: PaymentService; config: Config };
 
 const idParam = z.object({ id: z.string().max(64) });
 
@@ -33,5 +45,31 @@ export default async function paymentRoutes(app: FastifyInstance, options: Payme
       amount: payment.amount,
       status: payment.status,
     };
+  });
+
+  // ---- SAVED CARDS ----
+  app.get('/methods', async (request) => {
+    requireFeature(options.config, 'paymentMethods');
+    return options.payments.listCards(requireCustomer(request));
+  });
+
+  app.post('/methods/setup', async (request) => {
+    requireFeature(options.config, 'paymentMethods');
+    return options.payments.startCardSetup(requireCustomer(request));
+  });
+
+  app.delete('/methods/:id', async (request, reply) => {
+    requireFeature(options.config, 'paymentMethods');
+    const actor = requireCustomer(request);
+    const { id } = parseInput(idParam, request.params);
+    await options.payments.removeCard(actor, id);
+    return reply.status(204).send();
+  });
+
+  app.post('/methods/:id/default', async (request) => {
+    requireFeature(options.config, 'paymentMethods');
+    const actor = requireCustomer(request);
+    const { id } = parseInput(idParam, request.params);
+    return options.payments.makeDefaultCard(actor, id);
   });
 }

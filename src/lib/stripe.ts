@@ -52,6 +52,18 @@ export type DepositHoldInput = {
   amountCents: number;
 };
 
+// A card a customer has saved with Stripe, as the app may show it: the brand,
+// the last four digits and the expiry, and never more. The number itself stays
+// with Stripe.
+export type SavedCard = {
+  id: string;
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+  isDefault: boolean;
+};
+
 // A rental business's own Stripe account, which is where their share is sent.
 // SXM Rentals never holds their money on their behalf: Stripe pays them
 // directly, and we only ever ask for the transfer.
@@ -98,6 +110,20 @@ export type PaymentGateway = {
   getConnectedAccount(accountId: string): Promise<ConnectedAccount | null>;
   // Send a business their share.
   createTransfer(input: { accountId: string; amountCents: number; reference: string }): Promise<{ id: string }>;
+
+  // ---- SAVED CARDS ----
+  // The customer's own record at Stripe, which their saved cards hang off.
+  createCustomer(input: { customerId: string; email: string; name: string }): Promise<{ id: string }>;
+  // Removing it takes every saved card with it. Used when an account closes.
+  deleteCustomer(stripeCustomerId: string): Promise<void>;
+  // A one-time secret the app gives Stripe's own form, in "save a card" mode.
+  // The card goes from the phone to Stripe; this server never sees it.
+  createCardSetup(stripeCustomerId: string): Promise<{ clientSecret: string }>;
+  listCards(stripeCustomerId: string): Promise<SavedCard[]>;
+  // Both answer false when the card is not this customer's — which the caller
+  // turns into "not found", exactly like a card that does not exist.
+  removeCard(stripeCustomerId: string, cardId: string): Promise<boolean>;
+  setDefaultCard(stripeCustomerId: string, cardId: string): Promise<boolean>;
 };
 
 // Raised when the endpoints are used before Stripe has been connected.
@@ -232,6 +258,72 @@ export function createStripeGateway(options: {
       return { id: transfer.id };
     },
 
+    // ---- SAVED CARDS ----
+    async createCustomer(input) {
+      const customer = await stripe.customers.create(
+        { email: input.email, name: input.name, metadata: { customerId: input.customerId } },
+        // Asking twice for the same person makes one Stripe customer, not two.
+        { idempotencyKey: `customer-${input.customerId}` },
+      );
+      return { id: customer.id };
+    },
+
+    async deleteCustomer(stripeCustomerId) {
+      try {
+        await stripe.customers.del(stripeCustomerId);
+      } catch (error) {
+        // Already gone is the result we wanted.
+        if ((error as { code?: string }).code !== 'resource_missing') throw error;
+      }
+    },
+
+    async createCardSetup(stripeCustomerId) {
+      const setup = await stripe.setupIntents.create({
+        customer: stripeCustomerId,
+        // Saved for the customer to CHOOSE when they pay — never to be charged
+        // while they are not there. Charging a card with nobody at the keyboard
+        // needs their agreement in so many words, and nobody has asked for it.
+        usage: 'on_session',
+        automatic_payment_methods: { enabled: true },
+      });
+      return { clientSecret: setup.client_secret ?? '' };
+    },
+
+    async listCards(stripeCustomerId) {
+      const [methods, customer] = await Promise.all([
+        stripe.paymentMethods.list({ customer: stripeCustomerId, type: 'card' }),
+        stripe.customers.retrieve(stripeCustomerId),
+      ]);
+      const defaultId =
+        !customer.deleted && typeof customer.invoice_settings?.default_payment_method === 'string'
+          ? customer.invoice_settings.default_payment_method
+          : null;
+      return methods.data
+        .filter((method) => method.card)
+        .map((method) => ({
+          id: method.id,
+          brand: method.card!.brand,
+          last4: method.card!.last4,
+          expMonth: method.card!.exp_month,
+          expYear: method.card!.exp_year,
+          isDefault: method.id === defaultId,
+        }));
+    },
+
+    async removeCard(stripeCustomerId, cardId) {
+      const method = await stripe.paymentMethods.retrieve(cardId).catch(() => null);
+      if (!method || method.customer !== stripeCustomerId) return false;
+      await stripe.paymentMethods.detach(cardId);
+      return true;
+    },
+
+    async setDefaultCard(stripeCustomerId, cardId) {
+      const method = await stripe.paymentMethods.retrieve(cardId).catch(() => null);
+      if (!method || method.customer !== stripeCustomerId) return false;
+      await stripe.customers.update(stripeCustomerId, { invoice_settings: { default_payment_method: cardId } });
+      return true;
+    },
+
     verifyWebhook(rawBody, signature) {
       if (!options.webhookSecret) throw notConfigured();
       if (!signature) {
@@ -273,6 +365,12 @@ export function createUnconfiguredGateway(): PaymentGateway {
     createAccountOnboardingLink: refuse,
     getConnectedAccount: refuse,
     createTransfer: refuse,
+    createCustomer: refuse,
+    deleteCustomer: refuse,
+    createCardSetup: refuse,
+    listCards: refuse,
+    removeCard: refuse,
+    setDefaultCard: refuse,
     verifyWebhook() {
       throw notConfigured();
     },

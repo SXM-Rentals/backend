@@ -93,6 +93,7 @@ const listQuery = z.object({
 const idParam = z.object({ id: z.string().max(64) });
 const photoParams = z.object({ id: z.string().max(64), photoId: z.string().max(64) });
 const closeBody = z.object({ password: z.string().min(1).max(PASSWORD_MAX_LENGTH) });
+const payoutStartBody = z.object({ returnTo: z.enum(['app', 'web']).optional() });
 // Only an address, and only one that storage recognises as this car's — the
 // check that matters happens in the service, not here.
 const photoBody = z.object({ url: z.url().max(500) });
@@ -394,7 +395,20 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
 
   app.post('/me/payout-account', async (request) => {
     const { providerId } = await businessFor(request);
-    return startPayoutOnboarding(db, gateway, config, providerId);
+    const { returnTo } = parseInput(payoutStartBody, request.body ?? {});
+    // From the phone app: Stripe sends them to the redirect below, which hands
+    // over to the app, and the in-app browser closes itself when it sees that.
+    const returnUrl =
+      returnTo === 'app' ? `${request.protocol}://${request.host}/api/v1/providers/payout-return` : undefined;
+    return startPayoutOnboarding(db, gateway, config, providerId, returnUrl);
+  });
+
+  // Where Stripe sends a business that set up payouts from the phone app. Stripe
+  // only sends people to https addresses, so this one is ours, and all it does
+  // is hand over to the app. The destination is fixed — never taken from the
+  // request — so it cannot be used to send anybody anywhere else.
+  app.get('/payout-return', async (_request, reply) => {
+    return reply.redirect('sxmrentals://business/payout', 302);
   });
 
   app.get('/me/payout-account', async (request) => {

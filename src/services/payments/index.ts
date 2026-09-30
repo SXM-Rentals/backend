@@ -22,11 +22,13 @@ import { and, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   bookings,
+  customers,
   deposits,
   ledgerEntries,
   processedWebhookEvents,
   providerPayoutAccounts,
 } from '../../db/schema/index.js';
+import { holdExpiresAt, holdWindowOpensAt } from './holds.js';
 import type { PaymentGateway, WebhookEvent } from '../../lib/stripe.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
@@ -81,6 +83,23 @@ export function createPaymentService(deps: PaymentServiceDeps) {
     return booking;
   }
 
+  // The customer's record at Stripe, made the first time it is needed — when
+  // they save a card — and never before, so nobody gets a Stripe record just
+  // for looking at an empty list.
+  async function stripeCustomerFor(actor: Actor, options: { create: boolean }): Promise<string | null> {
+    const [customer] = await db.select().from(customers).where(eq(customers.id, actor.customerId)).limit(1);
+    if (!customer) throw notFound();
+    if (customer.stripeCustomerId || !options.create) return customer.stripeCustomerId;
+
+    const created = await gateway.createCustomer({
+      customerId: customer.id,
+      email: customer.email,
+      name: `${customer.firstName} ${customer.lastName}`,
+    });
+    await db.update(customers).set({ stripeCustomerId: created.id }).where(eq(customers.id, customer.id));
+    return created.id;
+  }
+
   return {
     // ---- PAYING FOR THE RENTAL ----
     // Asking twice gives the same payment back rather than starting a second.
@@ -119,6 +138,19 @@ export function createPaymentService(deps: PaymentServiceDeps) {
       if (!deposit) throw notFound('That booking has no security deposit.');
       if (deposit.status === 'held') throw conflict('deposit_already_held', 'That deposit is already being held.');
       if (deposit.status === 'claimed') throw conflict('deposit_claimed', 'That deposit has already been settled.');
+      if (booking.status === 'completed') {
+        throw conflict('booking_finished', 'That rental is over, so there is no deposit to hold.');
+      }
+
+      // Not before the two days before pickup: a hold placed earlier would be
+      // dropped by the bank before the car was even collected.
+      const opensAt = holdWindowOpensAt(booking.startDate, booking.pickupTime);
+      if (Date.now() < opensAt.getTime()) {
+        throw conflict(
+          'too_early',
+          `The deposit can be held from ${opensAt.toISOString().slice(0, 16).replace('T', ' at ')} (UTC), two days before pickup. A hold on a card only lasts about a week, so placing it sooner would mean it had gone before you collected the car.`,
+        );
+      }
 
       if (deposit.stripePaymentIntentId) {
         const existing = await gateway.getPayment(deposit.stripePaymentIntentId);
@@ -138,15 +170,57 @@ export function createPaymentService(deps: PaymentServiceDeps) {
       return { ...payment, paymentId: payment.id, amount: toAmount(deposit.amountCents) };
     },
 
+    // ---- SAVED CARDS ----
+    // Kept at Stripe, on the customer's own Stripe record. This server holds
+    // the id of that record and nothing else about any card: the app is told the
+    // brand, the last four digits and the expiry, which is all Stripe gives us.
+    async listCards(actor: Actor) {
+      const stripeCustomerId = await stripeCustomerFor(actor, { create: false });
+      if (!stripeCustomerId) return [];
+      return gateway.listCards(stripeCustomerId);
+    },
+
+    // The secret the app hands to Stripe's own form in "save a card" mode.
+    async startCardSetup(actor: Actor) {
+      const stripeCustomerId = await stripeCustomerFor(actor, { create: true });
+      return gateway.createCardSetup(stripeCustomerId!);
+    },
+
+    // Another customer's card is "not found", exactly like one that never
+    // existed — the same rule as every other record here.
+    async removeCard(actor: Actor, cardId: string) {
+      const stripeCustomerId = await stripeCustomerFor(actor, { create: false });
+      if (!stripeCustomerId || !(await gateway.removeCard(stripeCustomerId, cardId))) {
+        throw notFound('We could not find that card.');
+      }
+    },
+
+    async makeDefaultCard(actor: Actor, cardId: string) {
+      const stripeCustomerId = await stripeCustomerFor(actor, { create: false });
+      if (!stripeCustomerId || !(await gateway.setDefaultCard(stripeCustomerId, cardId))) {
+        throw notFound('We could not find that card.');
+      }
+      return gateway.listCards(stripeCustomerId);
+    },
+
     // ---- THE DEPOSIT, SEEN BY THE CUSTOMER ----
     async getDepositFor(actor: Actor, bookingId: string) {
       const booking = await loadOwnBooking(actor, bookingId);
       const [deposit] = await db.select().from(deposits).where(eq(deposits.bookingId, booking.id)).limit(1);
       if (!deposit) throw notFound('That booking has no security deposit.');
+      // When the bank will drop the hold, and whether that is before the car is
+      // due back — on a long rental it can be, and the customer should hear it
+      // from us rather than notice a missing hold.
+      const expires = deposit.status === 'held' ? holdExpiresAt(deposit.authorizedAt) : null;
       return {
         amount: toAmount(deposit.amountCents),
         status: deposit.status,
         heldSince: deposit.authorizedAt?.toISOString() ?? null,
+        holdExpiresAt: expires?.toISOString() ?? null,
+        expiresBeforeReturn: expires ? expires.toISOString().slice(0, 10) <= booking.endDate : false,
+        // When the customer may place the hold, so the app can say so rather
+        // than offer a button that will be refused.
+        holdOpensAt: holdWindowOpensAt(booking.startDate, booking.pickupTime).toISOString(),
         releasedAt: deposit.releasedAt?.toISOString() ?? null,
         // Shown only when part of it was kept, always with the written reason.
         ...(deposit.status === 'claimed'

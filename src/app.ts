@@ -173,7 +173,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(bookingRoutes, { prefix: '/bookings', db, notifications });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications });
       await api.register(messageRoutes, { prefix: '/messages', db });
-      await api.register(paymentRoutes, { prefix: '/payments', payments });
+      await api.register(paymentRoutes, { prefix: '/payments', payments, config });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway });
       await api.register(adminRoutes, { prefix: '/admin', db, config, admin, adminAuth, staffAccounts });

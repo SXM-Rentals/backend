@@ -57,6 +57,13 @@
       "when": 1790606712713,
       "tag": "0007_staff_tiers",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790784480370,
+      "tag": "0008_saved_cards",
+      "breakpoints": true
     }
   ]
 }

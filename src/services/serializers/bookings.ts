@@ -82,6 +82,10 @@ export function toCustomerBooking(
     ...depositView(deposit),
     // From the booking's own money only. The deposit is never added in.
     totalDueToday: toAmount(booking.totalDueTodayCents),
+    // Where paying for it has got to: "authorized" means not paid yet, "paid"
+    // and "refunded" mean what they say, and "failed" means the last attempt
+    // did not go through — so the app knows whether to offer "Pay for this".
+    paymentStatus: booking.paymentStatus,
     agreementSigned: booking.agreementSignedAt !== null,
     createdAt: booking.createdAt.toISOString(),
   };

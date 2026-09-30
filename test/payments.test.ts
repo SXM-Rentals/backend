@@ -62,6 +62,12 @@ const sendWebhook = (event: object, signature: string | null = TEST_SIGNATURE) =
     remoteAddress: uniqueIp(),
   });
 
+// A deposit may only be held in the two days before pickup (a card hold lasts
+// about a week), so a test that holds one first moves its booking to tomorrow.
+async function pickupSoon(bookingId: string) {
+  await ctx.db.update(bookings).set({ startDate: dateIn(1), endDate: dateIn(3) }).where(eq(bookings.id, bookingId));
+}
+
 // A fresh booking to work with, and the id of the payment started for it.
 // Each one takes a different week: there is only one car here, and booking it
 // twice for the same days is refused — correctly.
@@ -168,6 +174,7 @@ describe('the security deposit', () => {
   it('is held on the card, not charged — and never counted as revenue', async () => {
     const { booking } = await bookAndStartPayment();
 
+    await pickupSoon(booking.id);
     const hold = await post(`/deposits/bookings/${booking.id}/authorize`, {}, asCustomer());
     expect(hold.statusCode).toBe(200);
     expect(hold.json().amount).toBe(500);
@@ -200,6 +207,7 @@ describe('the security deposit', () => {
 
   it('is given back in full when the car comes back', async () => {
     const { booking } = await bookAndStartPayment();
+    await pickupSoon(booking.id);
     await post(`/deposits/bookings/${booking.id}/authorize`, {}, asCustomer());
     const [deposit] = await ctx.db.select().from(deposits).where(eq(deposits.bookingId, booking.id));
     await sendWebhook(ctx.gateway.eventFor('payment_intent.amount_capturable_updated', deposit!.stripePaymentIntentId!));
@@ -220,6 +228,7 @@ describe('the security deposit', () => {
 
   it('can only be kept in part, with a written reason, and never more than was held', async () => {
     const { booking } = await bookAndStartPayment();
+    await pickupSoon(booking.id);
     await post(`/deposits/bookings/${booking.id}/authorize`, {}, asCustomer());
     const [deposit] = await ctx.db.select().from(deposits).where(eq(deposits.bookingId, booking.id));
     await sendWebhook(ctx.gateway.eventFor('payment_intent.amount_capturable_updated', deposit!.stripePaymentIntentId!));
@@ -260,6 +269,7 @@ describe('the security deposit', () => {
 
   it('will not let a customer or a stranger release or keep a deposit', async () => {
     const { booking } = await bookAndStartPayment();
+    await pickupSoon(booking.id);
     await post(`/deposits/bookings/${booking.id}/authorize`, {}, asCustomer());
     const [deposit] = await ctx.db.select().from(deposits).where(eq(deposits.bookingId, booking.id));
 

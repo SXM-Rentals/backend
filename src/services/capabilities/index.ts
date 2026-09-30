@@ -70,7 +70,7 @@ const cloudinary = (config: Config) =>
 
 const FEATURES: Record<FeatureName, Feature> = {
   payments: { built: true, ready: stripe },
-  paymentMethods: { built: false, ready: stripe },
+  paymentMethods: { built: true, ready: stripe },
   payouts: { built: true, ready: stripe },
   identity: { built: false },
   push: { built: false },

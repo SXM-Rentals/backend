@@ -38,6 +38,20 @@ import { bookings, deposits } from '../../db/schema/index.js';
 // for and what Stripe documents for a manual capture.
 export const HOLD_LIFETIME_DAYS = 7;
 
+// ---- WHEN A HOLD MAY BE PLACED AT ALL ----
+// A hold lasts about seven days, so one placed when a trip three weeks away is
+// booked has gone before the car is collected — and the customer believes a
+// deposit is held when nothing is. So a hold may only be placed in the two days
+// before pickup (and on the day). The phone app offers it only then; this is
+// what stops an older or altered app doing it anyway.
+export const DEPOSIT_HOLD_WINDOW_HOURS = 48;
+
+// The moment the window opens for a booking collected at this date and time.
+export function holdWindowOpensAt(startDate: string, pickupTime: string): Date {
+  const pickup = new Date(`${startDate}T${pickupTime.padEnd(5, '0')}:00Z`);
+  return new Date(pickup.getTime() - DEPOSIT_HOLD_WINDOW_HOURS * 60 * 60 * 1000);
+}
+
 // The day a hold placed at this moment stops existing. Null when nothing is held.
 export function holdExpiresAt(authorizedAt: Date | null | undefined): Date | null {
   if (!authorizedAt) return null;

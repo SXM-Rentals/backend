@@ -18,7 +18,7 @@ import { bookings, customers, providers, vehicles } from '../src/db/schema/index
 import type { PhotoStorage } from '../src/lib/storage.js';
 import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
 import { AppError } from '../src/lib/errors.js';
-import type { PaymentGateway, WebhookEvent } from '../src/lib/stripe.js';
+import type { PaymentGateway, SavedCard, WebhookEvent } from '../src/lib/stripe.js';
 
 export const WEB_ORIGIN = 'http://localhost:3000';
 export const SESSION_COOKIE = 'sxm_session';
@@ -102,6 +102,10 @@ export type FakeGateway = PaymentGateway & {
   // The businesses' own Stripe accounts, and the money sent to them.
   accounts: Map<string, { providerId: string; payoutsEnabled: boolean; outstanding: string[] }>;
   transfers: { accountId: string; amountCents: number; reference: string }[];
+  // Stripe customers and the cards saved on them.
+  stripeCustomers: Map<string, { customerId: string; cards: SavedCard[]; deleted: boolean }>;
+  // What Stripe's form does when somebody saves a card: puts it on the customer.
+  saveCard(stripeCustomerId: string, card: { brand: string; last4: string }): string;
   // Builds the message Stripe would send about a payment.
   eventFor(type: string, paymentId: string, overrides?: Record<string, unknown>): WebhookEvent;
   // Builds the message Stripe sends when a business finishes giving details.
@@ -128,6 +132,47 @@ export function createFakeGateway(): FakeGateway {
     refunded: [],
     accounts: new Map(),
     transfers: [],
+    stripeCustomers: new Map(),
+
+    saveCard(stripeCustomerId, card) {
+      counter += 1;
+      const id = `pm_${counter}`;
+      const customer = gateway.stripeCustomers.get(stripeCustomerId);
+      customer?.cards.push({ id, brand: card.brand, last4: card.last4, expMonth: 12, expYear: 2030, isDefault: false });
+      return id;
+    },
+    // ---- SAVED CARDS ----
+    async createCustomer(input) {
+      counter += 1;
+      const id = `cus_${counter}`;
+      gateway.stripeCustomers.set(id, { customerId: input.customerId, cards: [], deleted: false });
+      return { id };
+    },
+    async deleteCustomer(stripeCustomerId) {
+      const customer = gateway.stripeCustomers.get(stripeCustomerId);
+      if (customer) {
+        customer.deleted = true;
+        customer.cards = [];
+      }
+    },
+    async createCardSetup(stripeCustomerId) {
+      return { clientSecret: `seti_${stripeCustomerId}_secret` };
+    },
+    async listCards(stripeCustomerId) {
+      return gateway.stripeCustomers.get(stripeCustomerId)?.cards.map((card) => ({ ...card })) ?? [];
+    },
+    async removeCard(stripeCustomerId, cardId) {
+      const customer = gateway.stripeCustomers.get(stripeCustomerId);
+      if (!customer?.cards.some((card) => card.id === cardId)) return false;
+      customer.cards = customer.cards.filter((card) => card.id !== cardId);
+      return true;
+    },
+    async setDefaultCard(stripeCustomerId, cardId) {
+      const customer = gateway.stripeCustomers.get(stripeCustomerId);
+      if (!customer?.cards.some((card) => card.id === cardId)) return false;
+      for (const card of customer.cards) card.isDefault = card.id === cardId;
+      return true;
+    },
 
     async createRentalPayment(input) {
       return create('rental', input.amountCents, { bookingId: input.bookingId, reference: input.bookingReference });

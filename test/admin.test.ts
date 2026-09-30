@@ -228,7 +228,9 @@ describe('approving what customers can see', () => {
 
 describe('deposits, from the staff side', () => {
   it('releases one, and records it', async () => {
-    // Put a hold on the deposit first.
+    // Put a hold on the deposit first — inside the two days before pickup, the
+    // only time a hold may be placed.
+    await ctx.db.update(bookings).set({ startDate: dateIn(1), endDate: dateIn(3) }).where(eq(bookings.id, bookingId));
     await post(
       `/deposits/bookings/${bookingId}/authorize`,
       {},
@@ -266,6 +268,8 @@ describe('deposits, from the staff side', () => {
       { vehicleId, startDate: dateIn(40), endDate: dateIn(43) },
       { authorization: `Bearer ${token}`, origin: WEB_ORIGIN },
     );
+    // A deposit is held only in the two days before pickup, so move it there.
+    await ctx.db.update(bookings).set({ startDate: dateIn(1), endDate: dateIn(3) }).where(eq(bookings.id, booking.json().id));
     await post(
       `/deposits/bookings/${booking.json().id}/authorize`,
       {},

@@ -700,6 +700,10 @@ export async function startPayoutOnboarding(
   gateway: PaymentGateway,
   config: Config,
   providerId: string,
+  // Where Stripe sends the business when they finish. The website by default;
+  // for the phone app, an https address on this API that hands over to the app
+  // (Stripe will not send somebody to an app's own address directly).
+  returnUrl?: string,
 ) {
   const [row] = await db
     .select({ account: providerPayoutAccounts, provider: providers, profile: providerBusinessProfiles })
@@ -725,11 +729,8 @@ export async function startPayoutOnboarding(
       .where(eq(providerPayoutAccounts.providerId, providerId));
   }
 
-  const link = await gateway.createAccountOnboardingLink({
-    accountId,
-    returnUrl: `${config.appUrl}/provider/payouts`,
-    refreshUrl: `${config.appUrl}/provider/payouts`,
-  });
+  const back = returnUrl ?? `${config.appUrl}/provider/payouts`;
+  const link = await gateway.createAccountOnboardingLink({ accountId, returnUrl: back, refreshUrl: back });
   return { url: link.url };
 }
 

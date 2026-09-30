@@ -39,6 +39,11 @@ export const customers = pgTable(
     // A confirmed island resident. A status, not a tier that is earned.
     isIslander: boolean('is_islander').notNull().default(false),
 
+    // Their record at Stripe, made the first time they save a card. Their
+    // saved cards live there, never here. Removed at Stripe when the account
+    // closes (the daily job does it), taking every saved card with it.
+    stripeCustomerId: text('stripe_customer_id'),
+
     // Set when the account is closed. The row stays so the audit trail and
     // past bookings still point at something real.
     deletedAt: moment('deleted_at'),
@@ -47,6 +52,7 @@ export const customers = pgTable(
   },
   (t) => [
     uniqueIndex('customers_email_unique').on(t.email),
+    uniqueIndex('customers_stripe_customer_unique').on(t.stripeCustomerId),
     check('customers_email_lowercase', sql`${t.email} = lower(${t.email})`),
   ],
 );

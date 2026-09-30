@@ -159,6 +159,8 @@ export type Booking = {
   depositStatus: DepositStatus;
   totalDueToday: number;
   agreementSigned: boolean;
+  // "authorized" = not paid yet; "paid"; "failed" = the last attempt failed; "refunded".
+  paymentStatus: 'paid' | 'authorized' | 'failed' | 'refunded';
   createdAt: string;
 };
 

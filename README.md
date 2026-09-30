@@ -189,6 +189,7 @@ Everything lives under `/api/v1`.
 | POST | `/bookings/:id/agreement` | Agree to the rental terms before pickup |
 | POST | `/bookings/:id/cancel` | Cancel one that has not started |
 | POST | `/payments/bookings/:id/intent` | Start (or resume) paying for a booking |
+| GET · POST · DELETE | `/payments/methods…` | Saved cards: list, save one (a setup secret), forget one, make one the default |
 | POST | `/deposits/bookings/:id/authorize` | Place the deposit hold on the card |
 | GET | `/deposits/bookings/:id` | What is being held, and its state |
 | POST | `/deposits/:id/release` | Give a deposit back — **staff only** |

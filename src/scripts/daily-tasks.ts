@@ -11,6 +11,8 @@
 //      hold lasts about seven days whatever the rental does.
 //   4. Gathers what each rental business is owed for the past week into a
 //      payout, ready to be sent.
+//   5. Removes the Stripe record — and with it every saved card — of anybody
+//      who has closed their account.
 //
 // Everything here is safe to run twice: a booking already in the right state is
 // left alone, a reminder already sent is not sent again, and a booking already
@@ -18,10 +20,11 @@
 //
 // It does NOT send money. Sending is a separate, deliberate step.
 
-import { eq, isNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { connectDatabase } from '../db/client.js';
-import { bookings, providers } from '../db/schema/index.js';
+import { bookings, customers, providers } from '../db/schema/index.js';
+import { createStripeGateway } from '../lib/stripe.js';
 import { createConsoleEmailSender, createUnconfiguredEmailSender } from '../lib/email.js';
 import { advanceBookingStatuses } from '../services/booking-engine/lifecycle.js';
 import { createNotificationService } from '../services/notifications/index.js';
@@ -92,6 +95,35 @@ try {
     );
   }
   console.log(`Payouts prepared: ${created}. None have been sent — that is a separate step.`);
+
+  // ---- 5: SAVED CARDS OF CLOSED ACCOUNTS ----
+  // Closing an account erases what is not needed for the books. Saved cards are
+  // not needed for anything once the account is gone, and they live at Stripe,
+  // not here — so the Stripe record goes, taking every card with it. Done here
+  // rather than at the moment of closing so a Stripe hiccup can never stop
+  // somebody closing their account; it is simply tried again tomorrow.
+  if (config.stripeSecretKey) {
+    const gateway = createStripeGateway({
+      secretKey: config.stripeSecretKey,
+      webhookSecret: config.stripeWebhookSecret,
+      currency: config.currency,
+    });
+    const closed = await connection.db
+      .select({ id: customers.id, stripeCustomerId: customers.stripeCustomerId })
+      .from(customers)
+      .where(and(isNotNull(customers.deletedAt), isNotNull(customers.stripeCustomerId)));
+    let removed = 0;
+    for (const row of closed) {
+      try {
+        await gateway.deleteCustomer(row.stripeCustomerId!);
+        await connection.db.update(customers).set({ stripeCustomerId: null }).where(eq(customers.id, row.id));
+        removed += 1;
+      } catch (error) {
+        console.warn(`Could not remove a closed account's saved cards at Stripe; will try again tomorrow.`, error);
+      }
+    }
+    console.log(`Saved cards of closed accounts: ${removed} Stripe record(s) removed.`);
+  }
 } catch (error) {
   console.error('Daily tasks failed:', error);
   process.exitCode = 1;
