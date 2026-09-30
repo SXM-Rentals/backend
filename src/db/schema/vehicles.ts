@@ -88,6 +88,13 @@ export const vehicles = pgTable(
     description: text('description').notNull().default(''),
     // New listings wait for staff review before customers can see them.
     listingStatus: listingStatus('listing_status').notNull().default('pending_review'),
+    // The number plate. Seen by the business and staff only, never by customers
+    // — staff need it to check the car's papers. Stored in capitals.
+    registration: text('registration'),
+    // Whether the business has answered "has this car had accidents?". Without
+    // it an empty history could mean "none" or "never asked", and customers
+    // were told nothing was recorded either way.
+    accidentHistoryDeclared: boolean('accident_history_declared').notNull().default(false),
     deletedAt: moment('deleted_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -99,6 +106,11 @@ export const vehicles = pgTable(
     check('vehicles_deposit_not_negative', sql`${t.depositAmountCents} >= 0`),
     check('vehicles_day_limits', sql`${t.minimumDays} >= 1 and ${t.minimumDays} <= ${t.maximumDays}`),
     check('vehicles_seats_positive', sql`${t.seats} > 0`),
+    // One car per registration within a business — which is also how a
+    // spreadsheet import recognises a car the business already has.
+    uniqueIndex('vehicles_provider_registration_unique')
+      .on(t.providerId, t.registration)
+      .where(sql`${t.deletedAt} is null and ${t.registration} is not null`),
   ],
 );
 

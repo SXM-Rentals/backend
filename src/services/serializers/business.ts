@@ -46,6 +46,14 @@ export function toBusinessProfile(profile: ProfileRow, provider: ProviderRow) {
     // the public record — one source, so the two cannot disagree.
     deliversVehicles: provider.deliversVehicles,
     airportPickup: provider.airportPickup,
+    // Where its application stands — waiting, approved or turned down — and,
+    // when turned down, staff's reason, so the dashboard can say which and why.
+    // isVerified on the public record alone cannot tell waiting from refused.
+    verificationStatus: provider.verificationStatus,
+    verificationReason: provider.verificationStatus === 'rejected' ? (profile.verificationReason ?? null) : null,
+    // Where it is based. Moving sides is the owner's to do (PATCH, with a town).
+    side: provider.side,
+    town: provider.town,
     apiConnected: profile.apiConnected,
     ...(profile.apiLastSyncedAt ? { apiLastSyncedAt: profile.apiLastSyncedAt.toISOString() } : {}),
   };
@@ -81,6 +89,10 @@ export function toVehiclePerformance(row: {
   // Money from rentals that are booked but not yet both of those — still to come,
   // or finished and not paid. Real, and not the same thing.
   bookedCents: number;
+  grossEarnedCents: number;
+  commissionEarnedCents: number;
+  grossBookedCents: number;
+  commissionBookedCents: number;
   bookings: number;
   daysOut: number;
   daysInPeriod: number;
@@ -94,6 +106,12 @@ export function toVehiclePerformance(row: {
     // A business reading it had no way to tell which of its money had arrived.
     revenueEarned: toAmount(row.earnedCents),
     revenueBooked: toAmount(row.bookedCents),
+    // Gross, commission and net together (product rule 3): gross less
+    // commission is exactly the revenue beside it.
+    grossEarned: toAmount(row.grossEarnedCents),
+    commissionEarned: toAmount(row.commissionEarnedCents),
+    grossBooked: toAmount(row.grossBookedCents),
+    commissionBooked: toAmount(row.commissionBookedCents),
     // The old name, kept for one release while the apps move across. It is the
     // two added together, which is what it always was.
     revenue: toAmount(row.earnedCents + row.bookedCents),

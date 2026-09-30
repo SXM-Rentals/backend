@@ -160,6 +160,9 @@ const profilePatchBody = z.object({
   fleetSizeBand: z.string().trim().max(40).optional(),
   locations: z.array(z.string().trim().min(1).max(160)).max(20).optional(),
   operatingSide: z.enum(['dutch', 'french', 'both']).optional(),
+  // Moving the business to the other side of the island. Only with a new town
+  // on that side, and only by the owner — see updateBusinessProfile.
+  side: z.enum(['dutch', 'french']).optional(),
 });
 
 // Prices arrive in dollars, the way they are typed on the form.
@@ -188,6 +191,10 @@ const vehicleBody = z.object({
   // free delivery.
   deliveryFee: z.number().min(0).max(1_000).optional(),
   description: z.string().trim().max(2000).optional(),
+  // The number plate, for the business and staff only.
+  registration: z.string().trim().min(1).max(20).optional(),
+  // Whether the accident question has been answered — true even for "none".
+  accidentHistoryDeclared: z.boolean().optional(),
   // What the business declares about the car's past. Sent as the whole list,
   // because that is how the form shows it. Capped so one car cannot carry a
   // novel.
@@ -207,6 +214,8 @@ const vehicleBody = z.object({
 // could be set and never removed.
 const vehiclePatchBody = vehicleBody.partial().extend({
   weeklyRate: z.number().positive().max(70_000).nullable().optional(),
+  // null takes a registration off, like a weekly rate.
+  registration: z.string().trim().min(1).max(20).nullable().optional(),
 });
 // A reply is words, a car to suggest, or both.
 const providerMessageBody = z.object({
@@ -262,8 +271,12 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
   });
 
   app.patch('/me', async (request) => {
-    const { providerId } = await businessFor(request);
+    const { providerId, role } = await businessFor(request);
     const patch = parseInput(profilePatchBody, request.body);
+    // Where the business is based is the owner's decision, not a colleague's.
+    if (patch.side !== undefined && role !== 'owner') {
+      throw new AppError(403, 'owner_only', 'Only the owner can move the business to the other side of the island.');
+    }
     return updateBusinessProfile(db, providerId, patch);
   });
 

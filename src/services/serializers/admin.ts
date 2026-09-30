@@ -133,6 +133,8 @@ export function toAdminVehicle(vehicle: VehicleRow, providerName: string) {
     dailyRate: toAmount(vehicle.dailyRateCents),
     side: vehicle.side,
     listingStatus: vehicle.listingStatus,
+    // For checking the car's papers.
+    registration: vehicle.registration,
   };
 }
 

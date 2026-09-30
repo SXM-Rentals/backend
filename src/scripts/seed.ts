@@ -105,7 +105,7 @@ try {
         town: business.town,
         description: business.description,
         phone: '+1 721 555 0100',
-        respondsIn: 'within an hour',
+        respondsIn: 'within_hour',
         deliversVehicles: true,
         airportPickup: business.side === 'dutch',
         // Approved, because an unapproved business is invisible to customers —

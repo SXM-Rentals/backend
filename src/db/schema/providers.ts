@@ -14,6 +14,7 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   doublePrecision,
   index,
   integer,
@@ -44,6 +45,8 @@ export const providers = pgTable('providers', {
   description: text('description').notNull().default(''),
   // The business line shown publicly — not the owner's personal mobile.
   phone: text('phone').notNull().default(''),
+  // How quickly the business usually answers, as a code the apps translate:
+  // within_hour, within_hours or within_day. Empty until somebody sets it.
   respondsIn: text('responds_in').notNull().default(''),
   deliversVehicles: boolean('delivers_vehicles').notNull().default(false),
   airportPickup: boolean('airport_pickup').notNull().default(false),
@@ -55,7 +58,10 @@ export const providers = pgTable('providers', {
   deletedAt: moment('deleted_at'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}, (t) => [
+  // Only the codes the apps translate, or nothing yet.
+  check('providers_responds_in_known', sql`${t.respondsIn} in ('', 'within_hour', 'within_hours', 'within_day')`),
+]);
 
 // ---- THE PRIVATE HALF ----
 export const providerBusinessProfiles = pgTable('provider_business_profiles', {
@@ -68,6 +74,9 @@ export const providerBusinessProfiles = pgTable('provider_business_profiles', {
   registrationStatus: registrationStatus('registration_status').notNull().default('pending'),
   registeredIn: text('registered_in'),
   registrationNumber: text('registration_number'),
+  // Staff's reason for turning the business down, which the business is shown
+  // so it knows what to fix. Cleared when it is approved.
+  verificationReason: text('verification_reason'),
   fleetSizeBand: text('fleet_size_band').notNull().default(''),
   locations: text('locations')
     .array()

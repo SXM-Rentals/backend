@@ -35,7 +35,8 @@ import {
   vehiclePhotos,
   vehicles,
 } from '../../db/schema/index.js';
-import { AppError, conflict, notFound } from '../../lib/errors.js';
+import { AppError, badRequest, conflict, notFound } from '../../lib/errors.js';
+import { exampleTowns, findTown } from '../../lib/towns.js';
 import type { PhotoStorage } from '../../lib/storage.js';
 import { threadIdsForBookings } from '../messaging/index.js';
 import { latestDateChanges, providerDateChange } from '../date-changes/index.js';
@@ -203,12 +204,30 @@ export type ProfilePatch = {
   fleetSizeBand?: string | undefined;
   locations?: string[] | undefined;
   operatingSide?: 'dutch' | 'french' | 'both' | undefined;
+  // Moving the business's base to the other side. Needs a town on that side.
+  side?: 'dutch' | 'french' | undefined;
 };
 
 // A business can edit its own description and details. It cannot make itself
 // verified: that is a staff decision, so those fields are not touched here.
 export async function updateBusinessProfile(db: Database, providerId: string, patch: ProfilePatch) {
+  // MOVING SIDES. Allowed, because businesses do move — but only together with
+  // a new base town that is actually on the new side, so the public page can
+  // never say "French side, Philipsburg". Each car keeps its own pickup town:
+  // a business moving its office does not mean every car moved with it.
+  if (patch.side !== undefined) {
+    if (!patch.town) {
+      throw badRequest('town_required', 'Moving to the other side needs the new town as well.');
+    }
+    const town = findTown(patch.town, patch.side);
+    if (!town || town.side !== patch.side) {
+      const side = patch.side === 'dutch' ? 'Dutch' : 'French';
+      throw badRequest('town_not_on_side', `That town is not on the ${side} side. For example: ${exampleTowns(patch.side)}.`);
+    }
+    patch = { ...patch, town: town.name };
+  }
   const publicChanges = {
+    ...(patch.side !== undefined ? { side: patch.side } : {}),
     ...(patch.description !== undefined ? { description: patch.description } : {}),
     ...(patch.town !== undefined ? { town: patch.town } : {}),
     ...(patch.phone !== undefined ? { phone: patch.phone } : {}),
@@ -347,8 +366,7 @@ async function fleetView(db: Database, rows: (typeof vehicles.$inferSelect)[]) {
       taken.get(row.id) ?? [],
     ),
     // Extra, for the business only: whether customers can see this car yet.
-    listingStatus: row.listingStatus,
-    reference: row.reference,
+    ...businessExtras(row),
   }));
 }
 
@@ -376,8 +394,31 @@ export type VehicleInput = {
   // Dollars, per rental. 0 or missing: free delivery.
   deliveryFee?: number | undefined;
   description?: string | undefined;
+  registration?: string | undefined;
+  accidentHistoryDeclared?: boolean | undefined;
   accidentHistory?: AccidentRecordInput[] | undefined;
 };
+
+// A number plate as it is stored: capitals, single spaces. "p 1234" and
+// "P-1234" stay different — the dash is part of how the island writes them.
+export function normaliseRegistration(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, ' ');
+}
+
+// What only the business (and staff) see about its own car, on top of what a
+// customer sees: whether it is on the site yet, its reference and its plate.
+function businessExtras(vehicle: typeof vehicles.$inferSelect) {
+  return { listingStatus: vehicle.listingStatus, reference: vehicle.reference, registration: vehicle.registration };
+}
+
+// Two cars in one fleet with the same plate is a mistake, answered in words.
+function registrationTaken(error: unknown, registration: string | null | undefined): AppError | null {
+  const cause = (error as { cause?: { code?: string; constraint?: string } })?.cause;
+  if (cause?.code === '23505' && cause.constraint === 'vehicles_provider_registration_unique') {
+    return new AppError(409, 'registration_taken', `Already in your fleet (registration ${registration}).`);
+  }
+  return null;
+}
 
 // What the business declares about the car's past. SXM Rentals does not check
 // it, and the car's page says so.
@@ -437,6 +478,9 @@ export async function addVehicle(db: Database, providerId: string, input: Vehicl
           latitude: input.latitude,
           longitude: input.longitude,
           description: input.description ?? '',
+          registration: input.registration ? normaliseRegistration(input.registration) : null,
+          // Declaring accidents answers the question as surely as saying "none".
+          accidentHistoryDeclared: input.accidentHistoryDeclared ?? Boolean(input.accidentHistory?.length),
           listingStatus: 'pending_review',
         })
         .returning();
@@ -445,13 +489,11 @@ export async function addVehicle(db: Database, providerId: string, input: Vehicl
         const accidents = input.accidentHistory?.length
           ? await db.select().from(vehicleAccidentRecords).where(eq(vehicleAccidentRecords.vehicleId, vehicle.id))
           : [];
-        return {
-          ...toVehicle(vehicle, [], accidents, []),
-          listingStatus: vehicle.listingStatus,
-          reference: vehicle.reference,
-        };
+        return { ...toVehicle(vehicle, [], accidents, []), ...businessExtras(vehicle) };
       }
     } catch (error) {
+      const taken = registrationTaken(error, input.registration && normaliseRegistration(input.registration));
+      if (taken) throw taken;
       const code = (error as { code?: string; cause?: { code?: string } })?.cause?.code;
       if (code !== '23505') throw error;
     }
@@ -471,7 +513,8 @@ async function loadOwnVehicle(db: Database, providerId: string, vehicleId: strin
   return vehicle;
 }
 
-export type VehiclePatch = Omit<Partial<VehicleInput>, 'weeklyRate'> & {
+export type VehiclePatch = Omit<Partial<VehicleInput>, 'weeklyRate' | 'registration'> & {
+  registration?: string | null | undefined;
   // A number sets it, null takes it away, missing leaves it alone. The three
   // have to be distinguishable or a weekly rate can never be removed.
   weeklyRate?: number | null | undefined;
@@ -522,26 +565,32 @@ export async function updateVehicle(db: Database, providerId: string, vehicleId:
     ...(patch.seats !== undefined ? { seats: patch.seats } : {}),
     ...(patch.doors !== undefined ? { doors: patch.doors } : {}),
     ...(patch.trim !== undefined ? { trim: patch.trim } : {}),
+    ...(patch.registration !== undefined
+      ? { registration: patch.registration === null ? null : normaliseRegistration(patch.registration) }
+      : {}),
+    ...(patch.accidentHistoryDeclared !== undefined ? { accidentHistoryDeclared: patch.accidentHistoryDeclared } : {}),
+    // Sending a history with accidents in it answers the question too.
+    ...(patch.accidentHistory?.length ? { accidentHistoryDeclared: true } : {}),
   };
   if (patch.accidentHistory !== undefined) {
     await replaceAccidentHistory(db, existing.id, patch.accidentHistory);
   }
 
-  const [updated] =
-    Object.keys(changes).length > 0
-      ? await db.update(vehicles).set(changes).where(eq(vehicles.id, existing.id)).returning()
-      : [existing];
+  let updated: typeof vehicles.$inferSelect | undefined = existing;
+  if (Object.keys(changes).length > 0) {
+    try {
+      [updated] = await db.update(vehicles).set(changes).where(eq(vehicles.id, existing.id)).returning();
+    } catch (error) {
+      throw registrationTaken(error, changes.registration) ?? error;
+    }
+  }
   // Answered with what the car now has, rather than an empty list, so the form
   // shows what it just saved instead of appearing to have lost it.
   const accidents = await db
     .select()
     .from(vehicleAccidentRecords)
     .where(eq(vehicleAccidentRecords.vehicleId, existing.id));
-  return {
-    ...toVehicle(updated!, [], accidents, []),
-    listingStatus: updated!.listingStatus,
-    reference: updated!.reference,
-  };
+  return { ...toVehicle(updated!, [], accidents, []), ...businessExtras(updated!) };
 }
 
 // Taking a car off the platform. Refused while somebody is due to collect it:
@@ -581,6 +630,8 @@ export async function listPerformance(db: Database, providerId: string) {
       .select({
         vehicleId: bookings.vehicleId,
         payoutCents: bookings.payoutCents,
+        grossCents: bookings.grossCents,
+        commissionCents: bookings.commissionCents,
         startDate: bookings.startDate,
         endDate: bookings.endDate,
         // Both are needed to tell money that has been earned from money that is
@@ -617,9 +668,15 @@ export async function listPerformance(db: Database, providerId: string) {
 
     return toVehiclePerformance({
       vehicleId: vehicle.id,
-      // Their share, after commission, in both cases.
+      // Their share, after commission, in both cases — and what the renters
+      // paid and the commission on it, from the bookings themselves, since the
+      // rate can change and working them out from today's rate would be wrong.
       earnedCents: earned.reduce((sum, row) => sum + row.payoutCents, 0),
       bookedCents: booked.reduce((sum, row) => sum + row.payoutCents, 0),
+      grossEarnedCents: earned.reduce((sum, row) => sum + row.grossCents, 0),
+      commissionEarnedCents: earned.reduce((sum, row) => sum + row.commissionCents, 0),
+      grossBookedCents: booked.reduce((sum, row) => sum + row.grossCents, 0),
+      commissionBookedCents: booked.reduce((sum, row) => sum + row.commissionCents, 0),
       bookings: forVehicle.length,
       daysOut,
       daysInPeriod: PERFORMANCE_WINDOW_DAYS,

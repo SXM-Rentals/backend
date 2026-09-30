@@ -61,6 +61,9 @@ export function toVehicle(
     longitude: vehicle.longitude,
     rating: vehicle.rating,
     reviewCount: vehicle.reviewCount,
+    // True once the business has answered the accident question — so an empty
+    // history can be read as "none declared" rather than "never asked".
+    accidentHistoryDeclared: vehicle.accidentHistoryDeclared,
     accidentHistory: [...accidents]
       .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn))
       .map((accident) => ({

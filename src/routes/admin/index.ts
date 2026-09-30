@@ -126,7 +126,6 @@ const providerPatchBody = z.discriminatedUnion('field', [
       'town',
       'description',
       'phone',
-      'respondsIn',
       'legalName',
       'contactEmail',
       'website',
@@ -138,6 +137,8 @@ const providerPatchBody = z.discriminatedUnion('field', [
     reason,
   }),
   z.object({ field: z.literal('side'), value: z.enum(['dutch', 'french']), reason }),
+  // A code the apps translate, never free English.
+  z.object({ field: z.literal('respondsIn'), value: z.enum(['within_hour', 'within_hours', 'within_day']), reason }),
   z.object({ field: z.enum(['deliversVehicles', 'airportPickup']), value: z.boolean(), reason }),
 ]);
 const ownPasswordBody = z.object({

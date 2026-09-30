@@ -96,8 +96,10 @@ export type Vehicle = {
   longitude: number;
   rating: number;
   reviewCount: number;
+  // True once the business has answered the accident question, even with "none".
+  accidentHistoryDeclared: boolean;
   accidentHistory: AccidentRecord[];
-  unavailableDates: string[]; // days already booked, as YYYY-MM-DD
+  unavailableDates: string[]; // days already booked or taken off sale, as YYYY-MM-DD
   description: string;
 };
 

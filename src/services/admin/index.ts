@@ -632,6 +632,11 @@ export function createAdminService(deps: AdminServiceDeps) {
           verificationStatus: input.approve ? 'approved' : 'rejected',
         })
         .where(eq(providers.id, provider.id));
+      // The business reads the reason on its own record when it is turned down.
+      await db
+        .update(providerBusinessProfiles)
+        .set({ verificationReason: input.approve ? null : input.reason.trim() })
+        .where(eq(providerBusinessProfiles.providerId, provider.id));
 
       await recordAudit(db, {
         staffId: actor.staffId,
