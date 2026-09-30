@@ -45,6 +45,14 @@ export type RentalPaymentInput = {
   customerEmail?: string | undefined;
 };
 
+// Paying for the extra days of a rental whose dates were changed.
+export type DateChangePaymentInput = {
+  bookingId: string;
+  bookingReference: string;
+  dateChangeId: string;
+  amountCents: number;
+};
+
 export type DepositHoldInput = {
   bookingId: string;
   bookingReference: string;
@@ -78,6 +86,8 @@ export type ConnectedAccount = {
 export type PaymentGateway = {
   // Charge the customer for the rental.
   createRentalPayment(input: RentalPaymentInput): Promise<PaymentRecord>;
+  // Charge the difference when a rental's new dates cost more.
+  createDateChangePayment(input: DateChangePaymentInput): Promise<PaymentRecord>;
   // Place a hold on the card for the deposit. Nothing is taken.
   createDepositHold(input: DepositHoldInput): Promise<PaymentRecord>;
   // Look up a payment we started earlier.
@@ -166,7 +176,29 @@ export function createStripeGateway(options: {
         },
         // Asking twice for the same booking returns the same payment rather
         // than creating a second one.
-        { idempotencyKey: `rental-${input.bookingId}` },
+        // The amount is part of the key: a booking whose dates (and so its
+        // price) changed before it was paid gets a payment for the new amount,
+        // where the same key would hand back the old one.
+        { idempotencyKey: `rental-${input.bookingId}-${input.amountCents}` },
+      );
+      return toRecord(intent);
+    },
+
+    async createDateChangePayment(input) {
+      const intent = await stripe.paymentIntents.create(
+        {
+          amount: input.amountCents,
+          currency,
+          // Matched back to the request, not the booking, when Stripe reports it.
+          metadata: {
+            kind: 'date_change',
+            bookingId: input.bookingId,
+            dateChangeId: input.dateChangeId,
+            reference: input.bookingReference,
+          },
+          automatic_payment_methods: { enabled: true },
+        },
+        { idempotencyKey: `date-change-${input.dateChangeId}` },
       );
       return toRecord(intent);
     },
@@ -383,6 +415,7 @@ export function createUnconfiguredGateway(): PaymentGateway {
   };
   return {
     createRentalPayment: refuse,
+    createDateChangePayment: refuse,
     createDepositHold: refuse,
     getPayment: refuse,
     captureDepositHold: refuse,

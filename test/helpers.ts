@@ -99,7 +99,7 @@ export const TEST_SIGNATURE = 'test-signature';
 
 export type FakeGateway = PaymentGateway & {
   // Every payment it has been asked to create, by id.
-  created: Map<string, { kind: 'rental' | 'deposit'; amountCents: number; metadata: Record<string, string> }>;
+  created: Map<string, { kind: 'rental' | 'deposit' | 'date_change'; amountCents: number; metadata: Record<string, string> }>;
   captured: { paymentId: string; amountCents: number }[];
   cancelled: string[];
   refunded: { paymentId: string; amountCents?: number }[];
@@ -125,7 +125,7 @@ export function createFakeGateway(): FakeGateway {
   const statuses = new Map<string, string>();
   let counter = 0;
 
-  const create = (kind: 'rental' | 'deposit', amountCents: number, metadata: Record<string, string>) => {
+  const create = (kind: 'rental' | 'deposit' | 'date_change', amountCents: number, metadata: Record<string, string>) => {
     counter += 1;
     const id = `pi_${kind}_${counter}`;
     created.set(id, { kind, amountCents, metadata: { ...metadata, kind } });
@@ -217,6 +217,13 @@ export function createFakeGateway(): FakeGateway {
 
     async createRentalPayment(input) {
       return create('rental', input.amountCents, { bookingId: input.bookingId, reference: input.bookingReference });
+    },
+    async createDateChangePayment(input) {
+      return create('date_change', input.amountCents, {
+        bookingId: input.bookingId,
+        dateChangeId: input.dateChangeId,
+        reference: input.bookingReference,
+      });
     },
     async createDepositHold(input) {
       return create('deposit', input.amountCents, {

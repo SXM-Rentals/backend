@@ -98,6 +98,9 @@ describe("rule 2: a rental business never sees a customer's contact details", ()
         // The car, named. It carries make, model, year and a photo — and no
         // contact detail, which is what this test is guarding.
         'vehicle',
+        // The latest request for new dates: dates, money and the business's
+        // own note. Nothing about the renter.
+        'dateChange',
         'status',
         'renterDisplayName',
         'renterVerified',

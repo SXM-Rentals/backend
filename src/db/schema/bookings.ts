@@ -109,6 +109,9 @@ export const bookings = pgTable(
     payoutId: uuid('payout_id').references(() => payouts.id, { onDelete: 'set null' }),
     agreementSignedAt: moment('agreement_signed_at'),
     cancelledAt: moment('cancelled_at'),
+    // Why the renter cancelled, if they said: plans_changed, found_another_car,
+    // flight_changed, price or other. Shown to the business on the booking.
+    cancellationReason: text('cancellation_reason'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -268,6 +271,9 @@ export const refundRequests = pgTable(
     decidedByStaffId: uuid('decided_by_staff_id').references(() => adminStaff.id, { onDelete: 'restrict' }),
     decidedAt: moment('decided_at'),
     decisionReason: text('decision_reason'),
+    // What the customer is told when a refund is denied. Kept apart from the
+    // decision reason, which may be written for staff only.
+    customerNote: text('customer_note'),
     requestedAt: moment('requested_at').notNull().defaultNow(),
   },
   (t) => [

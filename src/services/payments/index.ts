@@ -23,6 +23,7 @@ import type { Database } from '../../db/client.js';
 import {
   bookings,
   customers,
+  dateChangeRequests,
   deposits,
   ledgerEntries,
   processedWebhookEvents,
@@ -303,6 +304,15 @@ export function createPaymentService(deps: PaymentServiceDeps) {
       switch (event.type) {
         // The rental has been paid for.
         case 'payment_intent.succeeded': {
+          // The extra days of a longer rental: the request is marked paid.
+          if (metadata.kind === 'date_change' && metadata.dateChangeId) {
+            await db
+              .update(dateChangeRequests)
+              .set({ paymentStatus: 'paid' })
+              .where(eq(dateChangeRequests.id, metadata.dateChangeId));
+            await recordLedgerEntry(db, metadata.bookingId, 'charge', amountCents, 'succeeded', paymentId);
+            break;
+          }
           if (metadata.kind !== 'rental') break;
           await db
             .update(bookings)

@@ -44,6 +44,7 @@ import { AppError, notFound } from '../../lib/errors.js';
 import { isUuid } from '../../lib/ownership.js';
 import type { PhotoStorage } from '../../lib/storage.js';
 import type { PushService } from '../../services/push/index.js';
+import type { DateChangeService } from '../../services/date-changes/index.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
@@ -89,6 +90,7 @@ export type ProviderRouteOptions = {
   config: Config;
   storage: PhotoStorage;
   push: PushService;
+  dateChanges: DateChangeService;
 };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
@@ -101,6 +103,9 @@ const idParam = z.object({ id: z.string().max(64) });
 const photoParams = z.object({ id: z.string().max(64), photoId: z.string().max(64) });
 const closeBody = z.object({ password: z.string().min(1).max(PASSWORD_MAX_LENGTH) });
 const payoutStartBody = z.object({ returnTo: z.enum(['app', 'web']).optional() });
+const dateChangeParams = z.object({ id: z.string().max(64), requestId: z.string().max(64) });
+// The business's own words, shown to the renter as written.
+const declineBody = z.object({ note: z.string().trim().max(500).optional() });
 // Only an address, and only one that storage recognises as this car's — the
 // check that matters happens in the service, not here.
 const photoBody = z.object({ url: z.url().max(500) });
@@ -375,6 +380,24 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     // The renter is told a message arrived — who from, never what it says.
     await options.push.messageFromBusiness(thread.id);
     return reply.status(201).send(thread);
+  });
+
+  // ---- ANSWERING A REQUEST FOR NEW DATES ----
+  // Accepting changes the booking in one step: days checked again, dates moved,
+  // lines re-priced, any refund queued. Answers with the booking as it now is.
+  app.post('/me/bookings/:id/date-changes/:requestId/accept', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id, requestId } = parseInput(dateChangeParams, request.params);
+    await options.dateChanges.accept(providerId, id, requestId);
+    return getProviderBooking(db, providerId, id);
+  });
+
+  app.post('/me/bookings/:id/date-changes/:requestId/decline', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id, requestId } = parseInput(dateChangeParams, request.params);
+    const { note } = parseInput(declineBody, request.body ?? {});
+    await options.dateChanges.decline(providerId, id, requestId, { note });
+    return getProviderBooking(db, providerId, id);
   });
 
   // Writing FIRST, about one of its own bookings — "we are at the Simpson Bay

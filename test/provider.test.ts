@@ -212,6 +212,8 @@ describe('bookings across the fleet', () => {
         'renterVerified',
         // The car, named rather than left as a bare id.
         'vehicle',
+        // Any request for new dates — dates and money, nothing about the renter.
+        'dateChange',
         'startDate',
         'endDate',
         'pickupTime',

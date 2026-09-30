@@ -30,8 +30,10 @@ import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
 import { requireFeature } from '../../services/capabilities/index.js';
 import type { PaymentService } from '../../services/payments/index.js';
+import type { DateChangeService } from '../../services/date-changes/index.js';
 
-export type PaymentRouteOptions = { payments: PaymentService; config: Config };
+export type PaymentRouteOptions = { payments: PaymentService; config: Config; dateChanges: DateChangeService };
+const dateChangeParams = z.object({ id: z.string().max(64), requestId: z.string().max(64) });
 
 const idParam = z.object({ id: z.string().max(64) });
 
@@ -45,6 +47,13 @@ export default async function paymentRoutes(app: FastifyInstance, options: Payme
       amount: payment.amount,
       status: payment.status,
     };
+  });
+
+  // Paying the difference when a rental's new dates cost more.
+  app.post('/bookings/:id/date-changes/:requestId/intent', async (request) => {
+    const actor = requireCustomer(request);
+    const { id, requestId } = parseInput(dateChangeParams, request.params);
+    return options.dateChanges.startPayment(actor, id, requestId);
   });
 
   // ---- SAVED CARDS ----

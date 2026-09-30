@@ -897,7 +897,13 @@ export function createAdminService(deps: AdminServiceDeps) {
 
     // Approving sends the money back through Stripe. Either way the decision
     // and its reason are recorded against the staff member who made it.
-    async decideRefund(actor: AdminActor, id: string, input: { approve: boolean; reason: string }) {
+    async decideRefund(
+      actor: AdminActor,
+      id: string,
+      // customerNote: what the customer is told when it is denied. Separate from
+      // the reason, which is for the audit log and may be for staff only.
+      input: { approve: boolean; reason: string; customerNote?: string | undefined },
+    ) {
       const [refund] = await db
         .select()
         .from(refundRequests)
@@ -929,6 +935,7 @@ export function createAdminService(deps: AdminServiceDeps) {
           decidedByStaffId: actor.staffId,
           decidedAt: new Date(),
           decisionReason: input.reason.trim(),
+          customerNote: input.customerNote ?? null,
         })
         .where(eq(refundRequests.id, refund.id));
 

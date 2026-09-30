@@ -199,7 +199,10 @@ Everything lives under `/api/v1`.
 | GET | `/bookings/:id` | One of your own bookings |
 | GET | `/bookings/:id/cancellation` | What cancelling now would be worth back, before confirming |
 | POST | `/bookings/:id/agreement` | Agree to the rental terms before pickup |
-| POST | `/bookings/:id/cancel` | Cancel one that has not started |
+| POST | `/bookings/:id/cancel` | Cancel one that has not started, optionally saying why |
+| POST | `/bookings/:id/date-changes/quote` | What new dates would cost or give back, before asking |
+| POST | `/bookings/:id/date-changes` · `/:requestId/withdraw` | Ask the business for new dates · take the request back |
+| POST | `/payments/bookings/:id/date-changes/:requestId/intent` | Pay the difference once longer dates are accepted |
 | POST | `/payments/bookings/:id/intent` | Start (or resume) paying for a booking |
 | GET · POST · DELETE | `/payments/methods…` | Saved cards: list, save one (a setup secret), forget one, make one the default |
 | POST | `/deposits/bookings/:id/authorize` | Place the deposit hold on the card |
@@ -223,6 +226,7 @@ Everything lives under `/api/v1`.
 | GET | `/providers/me/performance` | How each car is doing |
 | GET | `/providers/me/bookings` | Bookings across the fleet |
 | GET | `/providers/me/bookings/:id` | One of them |
+| POST | `/providers/me/bookings/:id/date-changes/:requestId/accept` · `/decline` | Answer a renter's request for new dates |
 | GET | `/providers/me/messages` · `/messages/:id` | Conversations with renters |
 | POST | `/providers/me/messages/:id/messages` · `/read` | Reply · mark as read |
 | POST | `/providers/me/bookings/:id/messages` | Write first about one of its bookings |

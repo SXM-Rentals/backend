@@ -50,6 +50,7 @@ import rewardRoutes from './routes/rewards/index.js';
 import supportRoutes from './routes/support/index.js';
 import { createAccountService } from './services/account/index.js';
 import { createSupportService } from './services/support/index.js';
+import { createDateChangeService } from './services/date-changes/index.js';
 import { createDisabledPushSender, createExpoPushSender, type PushSender } from './lib/push.js';
 import { createPushService } from './services/push/index.js';
 import verificationRoutes from './routes/verification/index.js';
@@ -184,6 +185,9 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Customers talking to SXM Rentals staff.
   const support = createSupportService({ db, push });
 
+  // Changing a rental's dates, as a request the business answers.
+  const dateChanges = createDateChangeService({ db, config, gateway, notifications, push });
+
   // Identity checks: Stripe Identity or staff, as the owner chooses.
   const verification = createVerificationService({ db, config, gateway, notifications, logger: app.log });
   const admin = createAdminService({ db, gateway, payments });
@@ -209,12 +213,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(exportRoutes, { prefix: '/exports', account });
       await api.register(deviceRoutes, { prefix: '/devices', config, push });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
-      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage, push });
-      await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification });
+      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage, push, dateChanges });
+      await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification, dateChanges });
       await api.register(verificationRoutes, { prefix: '/verification', config, verification });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications, config });
       await api.register(messageRoutes, { prefix: '/messages', db, push });
-      await api.register(paymentRoutes, { prefix: '/payments', payments, config });
+      await api.register(paymentRoutes, { prefix: '/payments', payments, config, dateChanges });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway, verification });
       await api.register(adminRoutes, {

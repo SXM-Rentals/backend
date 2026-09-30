@@ -35,6 +35,7 @@ import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
 import type { Booking } from '../../types/api.js';
 import { toCustomerBooking } from '../serializers/bookings.js';
+import { customerDateChange, latestDateChanges, latestRefunds, refundView } from '../date-changes/index.js';
 import { carSummariesFor, carSummaryFor, providerNameFor, providerNamesFor } from '../summaries/index.js';
 import { countRentalDays, isVehicleFree, today } from '../availability-engine/index.js';
 
@@ -258,6 +259,9 @@ export async function createBooking(
       // costs one more small query for the business's name and nothing else.
       vehicle: { id: vehicle.id, make: vehicle.make, model: vehicle.model, year: vehicle.year, photo: null },
       providerName: await providerNameFor(tx, booking.providerId),
+      // Brand new: nothing refunded, no change asked for.
+      refund: null,
+      dateChange: null,
     });
   });
 
@@ -374,6 +378,8 @@ export async function cancelBooking(
   actor: Actor,
   bookingId: string,
   notifier?: BookingNotifier,
+  // Why, if they said. Shown to the business on the cancelled booking.
+  reason?: string | undefined,
 ): Promise<Booking> {
   const existing = await loadOwnBooking(db, actor, bookingId);
   if (existing.status === 'cancelled') throw conflict('already_cancelled', 'That booking is already cancelled.');
@@ -383,7 +389,7 @@ export async function cancelBooking(
 
   const [booking] = await db
     .update(bookings)
-    .set({ status: 'cancelled', cancelledAt: new Date() })
+    .set({ status: 'cancelled', cancelledAt: new Date(), cancellationReason: reason ?? null })
     .where(and(eq(bookings.id, existing.id), eq(bookings.customerId, actor.customerId), ne(bookings.status, 'cancelled')))
     .returning();
   if (!booking) throw conflict('already_cancelled', 'That booking is already cancelled.');
@@ -434,13 +440,21 @@ async function loadOwnBooking(db: Database, actor: Actor, bookingId: string) {
 }
 
 async function withLinesAndDeposit(db: Database, booking: typeof bookings.$inferSelect): Promise<Booking> {
-  const [lines, [deposit], vehicle, providerName] = await Promise.all([
+  const [lines, [deposit], vehicle, providerName, refunds, changes] = await Promise.all([
     db.select().from(bookingPriceLines).where(eq(bookingPriceLines.bookingId, booking.id)),
     db.select().from(deposits).where(eq(deposits.bookingId, booking.id)).limit(1),
     carSummaryFor(db, booking.vehicleId),
     providerNameFor(db, booking.providerId),
+    latestRefunds(db, [booking.id]),
+    latestDateChanges(db, [booking.id]),
   ]);
-  return toCustomerBooking(booking, lines, deposit, { vehicle, providerName });
+  const change = changes.get(booking.id);
+  return toCustomerBooking(booking, lines, deposit, {
+    vehicle,
+    providerName,
+    refund: refundView(refunds.get(booking.id)),
+    dateChange: change ? customerDateChange(change) : null,
+  });
 }
 
 // A whole list of bookings, with the cars and business names gathered ONCE
@@ -451,11 +465,13 @@ async function listWithLinesAndDeposits(
 ): Promise<Booking[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
-  const [lines, depositRows, cars, names] = await Promise.all([
+  const [lines, depositRows, cars, names, refunds, changes] = await Promise.all([
     db.select().from(bookingPriceLines).where(inArray(bookingPriceLines.bookingId, ids)),
     db.select().from(deposits).where(inArray(deposits.bookingId, ids)),
     carSummariesFor(db, rows.map((row) => row.vehicleId)),
     providerNamesFor(db, rows.map((row) => row.providerId)),
+    latestRefunds(db, ids),
+    latestDateChanges(db, ids),
   ]);
 
   return rows.map((row) =>
@@ -463,7 +479,12 @@ async function listWithLinesAndDeposits(
       row,
       lines.filter((line) => line.bookingId === row.id),
       depositRows.find((deposit) => deposit.bookingId === row.id),
-      { vehicle: cars.get(row.vehicleId) ?? null, providerName: names.get(row.providerId) ?? '' },
+      {
+        vehicle: cars.get(row.vehicleId) ?? null,
+        providerName: names.get(row.providerId) ?? '',
+        refund: refundView(refunds.get(row.id)),
+        dateChange: changes.has(row.id) ? customerDateChange(changes.get(row.id)!) : null,
+      },
     ),
   );
 }

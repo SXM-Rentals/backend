@@ -62,6 +62,11 @@ const loginBody = z.object({
 const mfaBody = z.object({ code: z.string().trim().min(6).max(10) });
 const decisionBody = z.object({ approve: z.boolean(), reason });
 const reasonOnlyBody = z.object({ reason });
+const refundDecisionBody = z.object({
+  approve: z.boolean(),
+  reason,
+  customerNote: z.string().trim().min(3).max(500).optional(),
+});
 const supportReplyBody = z.object({ body: z.string().trim().min(1).max(4000) });
 const identityDecisionBody = z.object({
   decision: z.enum(['approved', 'rejected', 'resubmit']),
@@ -554,7 +559,7 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   app.post('/refunds/:id/decision', async (request, reply) => {
     const actor = staff(request);
     const { id } = parseInput(idParam, request.params);
-    const body = parseInput(decisionBody, request.body);
+    const body = parseInput(refundDecisionBody, request.body);
     await admin.decideRefund(actor, id, body);
     return reply.status(204).send();
   });

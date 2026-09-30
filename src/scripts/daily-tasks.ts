@@ -32,6 +32,7 @@ import { advanceBookingStatuses } from '../services/booking-engine/lifecycle.js'
 import { createNotificationService } from '../services/notifications/index.js';
 import { buildPayout } from '../services/payment-splitting/index.js';
 import { holdsExpiringBeforeReturn } from '../services/payments/holds.js';
+import { expireUnansweredDateChanges } from '../services/date-changes/index.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const asDate = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 10);
@@ -66,6 +67,10 @@ try {
   // Phones whose app has been removed stop being sent to.
   const receipts = await push.checkReceipts();
   console.log(`Push receipts: ${receipts.checked} checked, ${receipts.removed} phone(s) no longer registered and removed.`);
+
+  // Requests for new dates that nobody answered in time.
+  const expired = await expireUnansweredDateChanges(connection.db);
+  console.log(`Date change requests: ${expired} expired unanswered.`);
 
   // ---- 3: DEPOSIT HOLDS ABOUT TO RUN OUT ----
   // A card hold lasts about seven days whatever the rental does, so on a longer

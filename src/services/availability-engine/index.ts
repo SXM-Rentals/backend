@@ -60,6 +60,9 @@ export async function isVehicleFree(
   vehicleId: string,
   startDate: string,
   endDate: string,
+  // A booking not to count as a clash — the one whose own dates are changing,
+  // which obviously overlaps itself.
+  exceptBookingId?: string,
 ): Promise<boolean> {
   const [clash] = await db
     .select({ id: bookings.id })
@@ -68,6 +71,7 @@ export async function isVehicleFree(
       and(
         eq(bookings.vehicleId, vehicleId),
         ne(bookings.status, 'cancelled'),
+        exceptBookingId ? ne(bookings.id, exceptBookingId) : undefined,
         // They overlap unless one finishes before the other starts.
         lt(bookings.startDate, endDate),
         gt(bookings.endDate, startDate),

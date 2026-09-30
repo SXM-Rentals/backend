@@ -31,12 +31,21 @@ import {
 } from '../../services/booking-engine/index.js';
 import type { NotificationService } from '../../services/notifications/index.js';
 import type { VerificationService } from '../../services/verification/index.js';
+import type { DateChangeService } from '../../services/date-changes/index.js';
 
 export type BookingRouteOptions = {
   db: Database;
   notifications: NotificationService;
   verification: VerificationService;
+  dateChanges: DateChangeService;
 };
+
+const newDatesBody = z.object({ startDate: z.iso.date(), endDate: z.iso.date() });
+const requestParams = z.object({ id: z.string().max(64), requestId: z.string().max(64) });
+// Why somebody cancelled — only these, so the business sees words it can trust.
+const cancelBody = z.object({
+  reason: z.enum(['plans_changed', 'found_another_car', 'flight_changed', 'price', 'other']).optional(),
+});
 
 // A time of day as the apps send it, e.g. "10:00".
 const timeField = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Please give a time like 10:00.');
@@ -109,7 +118,30 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
   app.post('/:id/cancel', async (request) => {
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
-    return cancelBooking(db, actor, id, notifications);
+    const { reason } = parseInput(cancelBody, request.body ?? {});
+    return cancelBooking(db, actor, id, notifications, reason);
+  });
+
+  // ---- CHANGING THE DATES ----
+  // Priced here, asked of the business, and only an accepted request changes the
+  // booking. See services/date-changes.
+  app.post('/:id/date-changes/quote', async (request) => {
+    const actor = requireCustomer(request);
+    const { id } = parseInput(idParam, request.params);
+    return options.dateChanges.quote(actor, id, parseInput(newDatesBody, request.body));
+  });
+
+  app.post('/:id/date-changes', async (request, reply) => {
+    const actor = requireCustomer(request);
+    const { id } = parseInput(idParam, request.params);
+    const created = await options.dateChanges.request(actor, id, parseInput(newDatesBody, request.body));
+    return reply.status(201).send(created);
+  });
+
+  app.post('/:id/date-changes/:requestId/withdraw', async (request) => {
+    const actor = requireCustomer(request);
+    const { id, requestId } = parseInput(requestParams, request.params);
+    return options.dateChanges.withdraw(actor, id, requestId);
   });
 
   // Agreeing to the rental terms, before pickup. The customer's own action, so

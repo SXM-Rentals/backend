@@ -15,6 +15,7 @@
 // 3. A business always sees its own share: gross, commission and net are
 //    always returned together.
 
+import { customerDateChange, providerDateChange, refundView } from '../date-changes/index.js';
 import type { bookingPriceLines, bookings, deposits } from '../../db/schema/index.js';
 import type { Booking, DepositStatus, ProviderBooking, VerificationStatus, CarSummary } from '../../types/api.js';
 
@@ -31,7 +32,13 @@ export type RenterSummary = {
 };
 
 // What a booking needs besides its own row, gathered once for a whole list.
-export type BookingContext = { vehicle: CarSummary | null; providerName: string };
+export type BookingContext = {
+  vehicle: CarSummary | null;
+  providerName: string;
+  // The latest refund on it, and the latest request to change its dates.
+  refund: ReturnType<typeof refundView>;
+  dateChange: ReturnType<typeof customerDateChange> | null;
+};
 
 // Cents to dollars: 4550 → 45.5
 const toAmount = (cents: number) => cents / 100;
@@ -65,6 +72,9 @@ export function toCustomerBooking(
     providerId: booking.providerId,
     vehicle: context.vehicle,
     providerName: context.providerName,
+    // Whether money is coming back, and where the request has got to.
+    refund: context.refund,
+    dateChange: context.dateChange,
     status: booking.status,
     startDate: booking.startDate,
     endDate: booking.endDate,
@@ -100,6 +110,8 @@ export function toProviderBooking(
   // references is not a list anybody can read. It does not need its own name.
   vehicle: CarSummary | null,
   threadId?: string,
+  // The latest request to change its dates, with what it would be worth to them.
+  dateChange: ReturnType<typeof providerDateChange> | null = null,
 ): ProviderBooking {
   return {
     id: booking.id,
@@ -110,6 +122,9 @@ export function toProviderBooking(
     renterDisplayName: renterDisplayName(renter.firstName, renter.lastName),
     renterVerified: renter.verificationStatus === 'approved',
     ...(threadId ? { threadId } : {}),
+    dateChange,
+    // Why the renter cancelled, if they said.
+    ...(booking.status === 'cancelled' ? { cancellationReason: booking.cancellationReason } : {}),
     startDate: booking.startDate,
     endDate: booking.endDate,
     pickupTime: booking.pickupTime,

@@ -135,6 +135,25 @@ export type CarSummary = {
   photo: string | null;
 };
 
+export type DateChangeView = {
+  id: string;
+  startDate: string;
+  endDate: string;
+  fromStartDate: string;
+  fromEndDate: string;
+  days: number;
+  fromDays: number;
+  total: number;
+  difference: number;
+  refund: number;
+  explanation: string | null;
+  status: 'pending' | 'accepted' | 'declined' | 'withdrawn' | 'expired';
+  requestedAt: string;
+  decidedAt: string | null;
+  note: string | null;
+  paymentStatus: 'unpaid' | 'paid' | null;
+};
+
 export type Booking = {
   id: string;
   reference: string;
@@ -145,6 +164,10 @@ export type Booking = {
   // breaks.
   vehicle: CarSummary | null;
   providerName: string;
+  // The latest refund, after a cancellation or a shortened rental.
+  refund: { amount: number; status: 'pending' | 'approved' | 'denied'; requestedAt: string; decidedAt: string | null; note: string | null } | null;
+  // The latest request to change its dates. See services/date-changes.
+  dateChange: DateChangeView | null;
   status: BookingStatus;
   startDate: string;
   endDate: string;
@@ -172,6 +195,8 @@ export type ProviderBooking = {
   reference: string;
   vehicleId: string;
   vehicle: CarSummary | null;
+  dateChange: (DateChangeView & { grossAmount: number; commission: number; netAmount: number }) | null;
+  cancellationReason?: string | null;
   status: BookingStatus;
   renterDisplayName: string;
   renterVerified: boolean;

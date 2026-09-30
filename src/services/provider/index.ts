@@ -38,6 +38,7 @@ import {
 import { AppError, conflict, notFound } from '../../lib/errors.js';
 import type { PhotoStorage } from '../../lib/storage.js';
 import { threadIdsForBookings } from '../messaging/index.js';
+import { latestDateChanges, providerDateChange } from '../date-changes/index.js';
 import { carSummariesFor, carSummaryFor } from '../summaries/index.js';
 import type { Actor } from '../../lib/ownership.js';
 import { isUuid } from '../../lib/ownership.js';
@@ -631,12 +632,13 @@ export async function listProviderBookings(db: Database, providerId: string) {
     .from(deposits)
     .where(inArray(deposits.bookingId, rows.map((row) => row.booking.id)));
 
-  const [cars, threads] = await Promise.all([
+  const [cars, threads, changes] = await Promise.all([
     carSummariesFor(db, rows.map((row) => row.booking.vehicleId)),
     // The conversation about each booking, so the business can open it from the
     // booking. ProviderBooking has always had a place for this and no caller
     // ever filled it, so the field was permanently absent.
     threadIdsForBookings(db, rows.map((row) => row.booking.id)),
+    latestDateChanges(db, rows.map((row) => row.booking.id)),
   ]);
 
   return rows.map((row) =>
@@ -650,6 +652,7 @@ export async function listProviderBookings(db: Database, providerId: string) {
       },
       cars.get(row.booking.vehicleId) ?? null,
       threads.get(row.booking.id),
+      changes.has(row.booking.id) ? providerDateChange(changes.get(row.booking.id)!) : null,
     ),
   );
 }
@@ -664,10 +667,11 @@ export async function getProviderBooking(db: Database, providerId: string, booki
     .limit(1);
   if (!row) throw notFound('We could not find that booking.');
 
-  const [[deposit], vehicle, threads] = await Promise.all([
+  const [[deposit], vehicle, threads, changes] = await Promise.all([
     db.select().from(deposits).where(eq(deposits.bookingId, row.booking.id)).limit(1),
     carSummaryFor(db, row.booking.vehicleId),
     threadIdsForBookings(db, [row.booking.id]),
+    latestDateChanges(db, [row.booking.id]),
   ]);
   return toProviderBooking(
     row.booking,
@@ -679,6 +683,7 @@ export async function getProviderBooking(db: Database, providerId: string, booki
     },
     vehicle,
     threads.get(row.booking.id),
+    changes.has(row.booking.id) ? providerDateChange(changes.get(row.booking.id)!) : null,
   );
 }
 
