@@ -24,6 +24,19 @@ import { buildEmail, type EmailBrand, type EmailContent } from '../../lib/email-
 import { notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
 import { today } from '../availability-engine/index.js';
+import type { PushCategory, PushService } from '../push/index.js';
+
+// Which of a person's six choices each kind of notification falls under.
+const CATEGORY_BY_KIND: Record<NotificationKind, PushCategory> = {
+  booking_confirmed: 'bookings',
+  cancellation: 'bookings',
+  verification: 'bookings',
+  pickup_reminder: 'pickupReminders',
+  return_reminder: 'returnReminders',
+  late_return: 'returnReminders',
+  payment: 'deposits',
+  promotion: 'offers',
+};
 
 type Logger = { error: (obj: object, msg: string) => void };
 
@@ -33,6 +46,9 @@ export type NotificationServiceDeps = {
   logger: Logger;
   // The website address and logo the emails are drawn with.
   brand: EmailBrand;
+  // Phones. Left out, nothing is pushed — the notification list and the email
+  // still happen exactly as before.
+  push?: PushService;
 };
 
 export type NotificationKind =
@@ -48,7 +64,7 @@ export type NotificationKind =
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 export function createNotificationService(deps: NotificationServiceDeps) {
-  const { db, email, logger, brand } = deps;
+  const { db, email, logger, brand, push } = deps;
 
   // Everything the messages need to say something useful: who, which car, when.
   async function bookingContext(bookingId: string) {
@@ -76,6 +92,8 @@ export function createNotificationService(deps: NotificationServiceDeps) {
     // When set, the same kind of message about the same booking is only ever
     // sent once.
     onlyOnce?: boolean;
+    // Which choice it falls under, when not the one its kind suggests.
+    pushCategory?: PushCategory;
   }): Promise<void> {
     try {
       if (input.onlyOnce && input.bookingId) {
@@ -87,13 +105,28 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         if (already) return;
       }
 
-      await db.insert(notifications).values({
-        customerId: input.customerId,
-        bookingId: input.bookingId,
-        kind: input.kind,
-        title: input.title,
-        body: input.body,
-      });
+      const [saved] = await db
+        .insert(notifications)
+        .values({
+          customerId: input.customerId,
+          bookingId: input.bookingId,
+          kind: input.kind,
+          title: input.title,
+          body: input.body,
+        })
+        .returning({ id: notifications.id });
+
+      // AND TO THEIR PHONE, where they chose to hear about this kind of thing.
+      // A push shows on a locked screen, so one whose words mention money says
+      // "open the app" instead: an amount never appears there.
+      if (push && saved) {
+        await push.sendToCustomer(input.customerId, {
+          category: input.pushCategory ?? CATEGORY_BY_KIND[input.kind],
+          title: input.title,
+          body: input.body.includes('$') ? 'Open SXM Rentals for the details.' : input.body,
+          data: input.bookingId ? { type: 'booking', id: input.bookingId } : { type: 'notification', id: saved.id },
+        });
+      }
 
       if (input.emailTo) {
         email
@@ -113,6 +146,9 @@ export function createNotificationService(deps: NotificationServiceDeps) {
     async bookingConfirmed(bookingId: string) {
       const row = await bookingContext(bookingId);
       if (!row) return;
+      // Its owners get a push of their own: the car and the date, nothing about
+      // the renter.
+      await push?.bookingForBusiness(bookingId);
       const car = `${row.vehicle.make} ${row.vehicle.model}`;
       await notify({
         customerId: row.customer.id,
@@ -174,6 +210,7 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         customerId: row.customer.id,
         bookingId,
         kind: 'payment',
+        pushCategory: 'bookings',
         title: 'Payment received',
         body: `We have received ${money(row.booking.grossCents)} for booking ${row.booking.reference}.`,
         onlyOnce: true,
@@ -187,6 +224,7 @@ export function createNotificationService(deps: NotificationServiceDeps) {
         customerId: row.customer.id,
         bookingId,
         kind: 'payment',
+        pushCategory: 'bookings',
         title: 'Payment did not go through',
         body: `The payment for booking ${row.booking.reference} was declined. Please try another card.`,
         emailTo: {

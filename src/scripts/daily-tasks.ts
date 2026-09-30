@@ -25,6 +25,8 @@ import { loadConfig } from '../config.js';
 import { connectDatabase } from '../db/client.js';
 import { bookings, customers, providers } from '../db/schema/index.js';
 import { createStripeGateway } from '../lib/stripe.js';
+import { createDisabledPushSender, createExpoPushSender } from '../lib/push.js';
+import { createPushService } from '../services/push/index.js';
 import { createConsoleEmailSender, createUnconfiguredEmailSender } from '../lib/email.js';
 import { advanceBookingStatuses } from '../services/booking-engine/lifecycle.js';
 import { createNotificationService } from '../services/notifications/index.js';
@@ -43,14 +45,27 @@ try {
   console.log(`Bookings: ${moved.startedToday} started, ${moved.completed} completed.`);
 
   // ---- 2: TOMORROW'S COLLECTIONS AND RETURNS ----
+  const push = createPushService({
+    db: connection.db,
+    sender: config.expoAccessToken
+      ? createExpoPushSender({ accessToken: config.expoAccessToken, logger: console })
+      : createDisabledPushSender(),
+    logger: console,
+  });
   const notifications = createNotificationService({
     db: connection.db,
     email: config.isProduction ? createUnconfiguredEmailSender(console) : createConsoleEmailSender(console),
     logger: console,
     brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl },
+    // Tomorrow's reminders go to phones too, for those who want them.
+    push,
   });
   const reminders = await notifications.sendTomorrowsReminders();
   console.log(`Reminders: ${reminders.pickups} collecting tomorrow, ${reminders.returns} returning tomorrow.`);
+
+  // Phones whose app has been removed stop being sent to.
+  const receipts = await push.checkReceipts();
+  console.log(`Push receipts: ${receipts.checked} checked, ${receipts.removed} phone(s) no longer registered and removed.`);
 
   // ---- 3: DEPOSIT HOLDS ABOUT TO RUN OUT ----
   // A card hold lasts about seven days whatever the rental does, so on a longer

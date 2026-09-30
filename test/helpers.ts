@@ -16,6 +16,7 @@ import { createAdminAuthService } from '../src/services/admin/auth.js';
 import { connectPglite, type Database } from '../src/db/client.js';
 import { bookings, customers, providers, vehicles } from '../src/db/schema/index.js';
 import type { PhotoStorage } from '../src/lib/storage.js';
+import type { PushSender } from '../src/lib/push.js';
 import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
 import { AppError } from '../src/lib/errors.js';
 import type { PaymentGateway, SavedCard, WebhookEvent } from '../src/lib/stripe.js';
@@ -45,6 +46,8 @@ export async function createTestContext(
     // A stand-in for Cloudinary. Left out, photo uploads answer "not switched
     // on yet", which is what production did until the account existed.
     storage?: PhotoStorage;
+    // A stand-in for Expo's push service. Left out, nothing is pushed.
+    pushSender?: PushSender;
   } = {},
 ): Promise<TestContext> {
   const connection = await connectPglite();
@@ -69,6 +72,7 @@ export async function createTestContext(
     breachedPasswords: { isBreached: async (password) => breachedPasswords.has(password) },
     payments: gateway,
     ...(options.storage ? { storage: options.storage } : {}),
+    ...(options.pushSender ? { pushSender: options.pushSender } : {}),
     extend: options.extend,
   });
   await app.ready();

@@ -44,6 +44,9 @@ import paymentRoutes from './routes/payments/index.js';
 import providerRoutes from './routes/providers/index.js';
 import vehicleRoutes from './routes/vehicles/index.js';
 import webhookRoutes from './routes/webhooks/index.js';
+import deviceRoutes from './routes/devices/index.js';
+import { createDisabledPushSender, createExpoPushSender, type PushSender } from './lib/push.js';
+import { createPushService } from './services/push/index.js';
 import verificationRoutes from './routes/verification/index.js';
 import { createVerificationService } from './services/verification/index.js';
 import { createAdminAuthService } from './services/admin/auth.js';
@@ -62,6 +65,7 @@ export type AppDependencies = {
   breachedPasswords?: BreachedPasswordChecker;
   payments?: PaymentGateway;
   storage?: PhotoStorage;
+  pushSender?: PushSender;
   // A chance to add extra routes before the app is sealed (used by tests).
   extend?: (app: FastifyInstance) => void | Promise<void>;
 };
@@ -143,6 +147,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         })
       : createUnconfiguredStorage());
 
+  // Pushes to phones, through Expo — only once its access token is set.
+  const push = createPushService({
+    db,
+    sender:
+      deps.pushSender ??
+      (config.expoAccessToken
+        ? createExpoPushSender({ accessToken: config.expoAccessToken, logger: app.log })
+        : createDisabledPushSender()),
+    logger: app.log,
+  });
+
   // Tells customers what has happened: in the app's notification list, and by
   // email for the things that warrant one.
   const notifications = createNotificationService({
@@ -150,6 +165,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     email,
     logger: app.log,
     brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl, social: config.socialAccounts },
+    push,
   });
   const payments = createPaymentService({ db, gateway, logger: app.log, notifications });
   // Identity checks: Stripe Identity or staff, as the owner chooses.
@@ -171,13 +187,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       // Which features the phone app may show. Public, and the same for everybody.
       await api.register(capabilityRoutes, { prefix: '/capabilities', config });
       await api.register(authRoutes, { prefix: '/auth', auth, config });
-      await api.register(customerRoutes, { prefix: '/customers', auth, config });
+      await api.register(customerRoutes, { prefix: '/customers', auth, config, push });
+      await api.register(deviceRoutes, { prefix: '/devices', config, push });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
-      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage });
+      await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage, push });
       await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification });
       await api.register(verificationRoutes, { prefix: '/verification', config, verification });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications });
-      await api.register(messageRoutes, { prefix: '/messages', db });
+      await api.register(messageRoutes, { prefix: '/messages', db, push });
       await api.register(paymentRoutes, { prefix: '/payments', payments, config });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway, verification });

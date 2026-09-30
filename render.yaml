@@ -128,3 +128,6 @@ services:
       # "staff" or "stripe" — how identity checks are made once switched on.
       - key: IDENTITY_METHOD
         sync: false
+      # Expo's access token. The only thing that lets a push go out as SXM Rentals.
+      - key: EXPO_ACCESS_TOKEN
+        sync: false

@@ -14,6 +14,7 @@
 
 import { and, desc, eq, gt, isNull, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { removeDevicesOfSessions } from '../push/index.js';
 import { customers, sessions } from '../../db/schema/index.js';
 import { generateToken, hashToken } from '../../lib/crypto.js';
 import type { Actor } from '../../lib/ownership.js';
@@ -107,6 +108,9 @@ export async function revokeSession(db: Database, customerId: string, sessionId:
     .set({ revokedAt: new Date() })
     .where(and(eq(sessions.id, sessionId), eq(sessions.customerId, customerId), isNull(sessions.revokedAt)))
     .returning({ id: sessions.id });
+  // The phones registered under it stop receiving pushes now — not whenever the
+  // phone gets round to unregistering, which a lost or wiped phone never does.
+  if (ended.length > 0) await removeDevicesOfSessions(db, { customerId, sessionId });
   return ended.length > 0;
 }
 
@@ -122,6 +126,9 @@ export async function revokeAllSessions(db: Database, customerId: string, except
         exceptSessionId ? ne(sessions.id, exceptSessionId) : undefined,
       ),
     );
+  // Every phone of theirs goes too, bar the one they are using. Covers signing
+  // out everywhere, a password change or reset, and closing the account.
+  await removeDevicesOfSessions(db, { customerId, ...(exceptSessionId ? { exceptSessionId } : {}) });
 }
 
 // ---- "WHERE AM I SIGNED IN?" ----

@@ -74,7 +74,7 @@ const FEATURES: Record<FeatureName, Feature> = {
   payouts: { built: true, ready: stripe },
   // Staff checks need nothing set up; Stripe Identity needs Stripe's keys.
   identity: { built: true, ready: (config) => config.identityMethod === 'staff' || stripe(config) },
-  push: { built: false },
+  push: { built: true, ready: (config) => Boolean(config.expoAccessToken) },
   photoUploads: { built: true, ready: cloudinary },
   rewards: { built: false },
   editProfile: { built: false },

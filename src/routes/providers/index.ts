@@ -43,6 +43,7 @@ import { providers } from '../../db/schema/index.js';
 import { AppError, notFound } from '../../lib/errors.js';
 import { isUuid } from '../../lib/ownership.js';
 import type { PhotoStorage } from '../../lib/storage.js';
+import type { PushService } from '../../services/push/index.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
@@ -82,7 +83,13 @@ import {
 } from '../../services/messaging/index.js';
 import { toProvider } from '../../services/serializers/vehicles.js';
 
-export type ProviderRouteOptions = { db: Database; gateway: PaymentGateway; config: Config; storage: PhotoStorage };
+export type ProviderRouteOptions = {
+  db: Database;
+  gateway: PaymentGateway;
+  config: Config;
+  storage: PhotoStorage;
+  push: PushService;
+};
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
 const listQuery = z.object({
@@ -365,6 +372,8 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(providerMessageBody, request.body);
     const thread = await replyAsProvider(db, providerId, id, body);
+    // The renter is told a message arrived — who from, never what it says.
+    await options.push.messageFromBusiness(thread.id);
     return reply.status(201).send(thread);
   });
 
@@ -377,6 +386,7 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(providerMessageBody, request.body);
     const thread = await messageAboutBooking(db, providerId, id, body);
+    await options.push.messageFromBusiness(thread.id);
     return reply.status(201).send(thread);
   });
 

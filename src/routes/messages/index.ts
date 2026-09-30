@@ -19,6 +19,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
+import type { PushService } from '../../services/push/index.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
 import {
@@ -29,7 +30,7 @@ import {
   startThread,
 } from '../../services/messaging/index.js';
 
-export type MessageRouteOptions = { db: Database };
+export type MessageRouteOptions = { db: Database; push: PushService };
 
 const idParam = z.object({ id: z.string().max(64) });
 // A message is words, a car, or both. The service refuses one that is neither.
@@ -57,6 +58,7 @@ export default async function messageRoutes(app: FastifyInstance, options: Messa
     const actor = requireCustomer(request);
     const body = parseInput(startBody, request.body);
     const thread = await startThread(db, actor, body);
+    await options.push.messageFromCustomer(thread.id);
     return reply.status(201).send(thread);
   });
 
@@ -65,6 +67,7 @@ export default async function messageRoutes(app: FastifyInstance, options: Messa
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(messageBody, request.body);
     const thread = await replyAsCustomer(db, actor, id, body);
+    await options.push.messageFromCustomer(thread.id);
     return reply.status(201).send(thread);
   });
 

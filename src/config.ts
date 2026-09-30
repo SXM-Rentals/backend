@@ -71,6 +71,9 @@ const envSchema = z
     // Identity's own page; costs per check) or "staff" (decided in the admin
     // panel). Staff until the owner says otherwise — it costs nothing.
     IDENTITY_METHOD: z.enum(['stripe', 'staff']).default('staff'),
+    // Expo's access token, for sending pushes with "enhanced push security" on.
+    // Without it no push is sent, and the app's push switch stays off.
+    EXPO_ACCESS_TOKEN: z.string().min(1).optional(),
   })
   // Production has stricter rules than a developer's laptop.
   .superRefine((env, ctx) => {
@@ -127,6 +130,7 @@ export type Config = {
   featuresOn: 'all' | string[];
   featuresOff: string[];
   identityMethod: 'stripe' | 'staff';
+  expoAccessToken: string | undefined;
 };
 
 // Turns "a, b ,c" into ["a", "b", "c"], dropping blanks.
@@ -186,5 +190,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     featuresOn: env.FEATURES.trim().toLowerCase() === 'all' ? 'all' : splitList(env.FEATURES),
     featuresOff: splitList(env.FEATURES_OFF),
     identityMethod: env.IDENTITY_METHOD,
+    expoAccessToken: env.EXPO_ACCESS_TOKEN,
   };
 }

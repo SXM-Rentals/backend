@@ -97,6 +97,8 @@ readable list, if any are wrong — and production is stricter: it requires
 | `STRIPE_SECRET_KEY` | Empty until Stripe is connected. Use the test key (`sk_test_…`) everywhere but production |
 | `STRIPE_WEBHOOK_SECRET` | From Stripe's webhook settings. Without it, Stripe's messages are refused |
 | `CURRENCY` | What bookings are charged in (`usd`) |
+| `EXPO_ACCESS_TOKEN` | Lets pushes go out through Expo. Empty: nothing is pushed |
+| `IDENTITY_METHOD` | `staff` or `stripe` — how identity checks are made once switched on |
 | `FEATURES` · `FEATURES_OFF` | Which features the phone app may show — names, or `all`. A feature also has to be built and set up. See `GET /capabilities` |
 
 Never put a real secret in `.env.example` or anywhere else git can see.
@@ -175,6 +177,8 @@ Everything lives under `/api/v1`.
 | GET | `/auth/sessions` | The devices you are signed in on |
 | DELETE | `/auth/sessions/:id` | Sign out one of them |
 | GET | `/customers/me` | Your own account, in the apps' `User` shape |
+| GET · PUT | `/customers/me/notification-preferences` | The six things a person chooses to hear about |
+| POST · DELETE | `/devices` · `/devices/current` | Register this phone for pushes · stop |
 | POST | `/customers/me/close` | Close your own account for good (asks for the password again) |
 | GET | `/vehicles` | Search and filter cars — every filter the Search screen offers |
 | GET | `/vehicles?providerId=` | One business's cars, for its public page |
