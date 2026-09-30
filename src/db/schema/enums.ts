@@ -21,6 +21,8 @@ export const verificationStatus = pgEnum('verification_status', [
   'rejected',
   'resubmit',
 ]);
+// A code sent by text: to sign in, or to confirm the number on an account.
+export const phoneChallengePurpose = pgEnum('phone_challenge_purpose', ['sign_in', 'confirm_phone']);
 export const authTokenPurpose = pgEnum('auth_token_purpose', [
   'verify_email',
   'reset_password',

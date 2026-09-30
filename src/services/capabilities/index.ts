@@ -74,6 +74,8 @@ const twilioVoice = (config: Config) =>
       config.twilio.apiKeySecret &&
       config.twilio.twimlAppSid,
   );
+// Texts need Twilio's account and a sender.
+const twilioSms = (config: Config) => Boolean(config.twilio.accountSid && config.twilio.authToken && config.twilio.smsFrom);
 const cloudinary = (config: Config) =>
   Boolean(config.cloudinaryCloudName && config.cloudinaryApiKey && config.cloudinaryApiSecret);
 
@@ -100,7 +102,7 @@ const FEATURES: Record<FeatureName, Feature> = {
   deleteNotifications: { built: true },
   dataExport: { built: true },
   messageOptions: { built: true },
-  phoneSignIn: { built: false },
+  phoneSignIn: { built: true, ready: twilioSms },
   calls: { built: true, ready: twilioVoice },
 };
 

@@ -21,6 +21,7 @@ export type User = {
   lastName: string;
   email: string;
   phone: string;
+  phoneVerified: boolean;
   accountType: AccountType;
   verification: {
     status: VerificationStatus;

@@ -12,7 +12,7 @@
 import { sql } from 'drizzle-orm';
 import { boolean, check, index, integer, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, moment, updatedAt } from './columns.js';
-import { accountType, authTokenPurpose, verificationStatus } from './enums.js';
+import { accountType, authTokenPurpose, phoneChallengePurpose, verificationStatus } from './enums.js';
 
 // ---- CUSTOMERS ----
 // One row per person with an SXM Rentals account. Matches the `User` shape the
@@ -26,6 +26,9 @@ export const customers = pgTable(
     lastName: text('last_name').notNull(),
     email: text('email').notNull(),
     phone: text('phone'),
+    // When the owner proved the number is theirs, with a code sent to it. Only a
+    // confirmed number signs in by text; changing the number clears this.
+    phoneVerifiedAt: moment('phone_verified_at'),
     accountType: accountType('account_type').notNull(),
 
     // Where they are in the identity check (filled in by the verification phase).
@@ -120,5 +123,32 @@ export const authTokens = pgTable(
   (t) => [
     uniqueIndex('auth_tokens_token_hash_unique').on(t.tokenHash),
     index('auth_tokens_customer_purpose_idx').on(t.customerId, t.purpose),
+  ],
+);
+
+// ---- A CODE SENT BY TEXT ----
+// Only a hash of the code is kept. One row per code asked for — including for a
+// number no account has, which is never actually texted — so the limits count
+// every attempt the same way and trying numbers tells nobody anything.
+export const phoneChallenges = pgTable(
+  'phone_challenges',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    phone: text('phone').notNull(),
+    purpose: phoneChallengePurpose('purpose').notNull(),
+    // Who it is for: the account with this confirmed number, or the signed-in
+    // person confirming it. Empty when no account has the number.
+    customerId: uuid('customer_id').references(() => customers.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    expiresAt: moment('expires_at').notNull(),
+    usedAt: moment('used_at'),
+    cancelledAt: moment('cancelled_at'),
+    ipAddress: text('ip_address'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('phone_challenges_phone_idx').on(t.phone, t.createdAt),
+    index('phone_challenges_ip_idx').on(t.ipAddress, t.createdAt),
   ],
 );

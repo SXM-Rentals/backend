@@ -135,7 +135,9 @@ export function createAccountService(deps: AccountServiceDeps) {
       const changes = {
         ...(patch.firstName !== undefined ? { firstName: patch.firstName } : {}),
         ...(patch.lastName !== undefined ? { lastName: patch.lastName } : {}),
+        // A different number has to be confirmed again before it signs in.
         ...(patch.phone !== undefined ? { phone: patch.phone || null } : {}),
+        ...(patch.phone !== undefined && (patch.phone || null) !== customer.phone ? { phoneVerifiedAt: null } : {}),
       };
       if (Object.keys(changes).length === 0) return toUser(customer);
       const [updated] = await db.update(customers).set(changes).where(eq(customers.id, customer.id)).returning();

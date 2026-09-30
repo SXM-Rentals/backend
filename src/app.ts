@@ -66,6 +66,7 @@ import { createIntegrationService, type Resolver } from './services/integrations
 import partnerRoutes from './routes/partner/index.js';
 import callRoutes from './routes/calls/index.js';
 import { createCallService } from './services/calls/index.js';
+import { createPhoneSignInService } from './services/auth/phone.js';
 import { createTwilioClient, type TwilioClient } from './lib/twilio.js';
 
 export type AppDependencies = {
@@ -208,6 +209,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Calls inside the app, and sign-in codes by text, both carried by Twilio.
   const twilio = deps.twilio ?? createTwilioClient(config, app.log);
   const calls = createCallService({ db, twilio, push });
+  const phone = createPhoneSignInService({ db, twilio, logger: app.log });
 
   // Changing a rental's dates, as a request the business answers.
   const dateChanges = createDateChangeService({ db, config, gateway, notifications, push });
@@ -230,7 +232,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       });
       // Which features the phone app may show. Public, and the same for everybody.
       await api.register(capabilityRoutes, { prefix: '/capabilities', config });
-      await api.register(authRoutes, { prefix: '/auth', auth, config, account });
+      await api.register(authRoutes, { prefix: '/auth', auth, config, account, phone });
       await api.register(customerRoutes, { prefix: '/customers', auth, config, push, account });
       await api.register(rewardRoutes, { prefix: '/rewards', config, account });
       await api.register(supportRoutes, { prefix: '/support', config, support });

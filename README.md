@@ -169,6 +169,7 @@ Everything lives under `/api/v1`.
 | POST | `/auth/verify-email` | Confirm the email with the link's code |
 | POST | `/auth/verify-email/resend` | Send a new confirmation link |
 | POST | `/auth/login` | Sign in |
+| POST | `/auth/phone/start` · `/auth/phone/verify` | Sign in with a code sent by text (Twilio), or confirm the number on your account |
 | POST | `/auth/logout` | Sign out of this device |
 | POST | `/auth/logout-all` | Sign out of every device |
 | POST | `/auth/password/forgot` | Email a password-reset link |

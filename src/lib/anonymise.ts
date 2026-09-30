@@ -34,12 +34,14 @@ export function closedAccountEmail(customerId: string): string {
 export function anonymisedCustomer(input: { id: string; lastName: string }): {
   email: string;
   phone: null;
+  phoneVerifiedAt: null;
   lastName: string;
 } {
   const initial = input.lastName.trim().charAt(0).toUpperCase();
   return {
     email: closedAccountEmail(input.id),
     phone: null,
+    phoneVerifiedAt: null,
     lastName: initial ? `${initial}.` : '',
   };
 }

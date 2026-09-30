@@ -17,6 +17,8 @@ export function toUser(customer: CustomerRow): User {
     lastName: customer.lastName,
     email: customer.email,
     phone: customer.phone ?? '',
+    // Whether the number was confirmed with a code, so it can sign in by text.
+    phoneVerified: customer.phoneVerifiedAt !== null,
     accountType: customer.accountType,
     verification: {
       status: customer.verificationStatus,

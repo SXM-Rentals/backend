@@ -32,9 +32,11 @@ import { clearSessionCookie, requireCustomer, sessionCookieName } from '../../mi
 import { AUTH_LIMITS } from '../../plugins/rate-limit.js';
 import type { AuthService } from '../../services/auth/index.js';
 import type { AccountService } from '../../services/account/index.js';
+import type { PhoneSignInService } from '../../services/auth/phone.js';
+import { requireFeature } from '../../services/capabilities/index.js';
 import type { NewSession } from '../../services/auth/sessions.js';
 
-export type AuthRouteOptions = { auth: AuthService; config: Config; account: AccountService };
+export type AuthRouteOptions = { auth: AuthService; config: Config; account: AccountService; phone: PhoneSignInService };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
 // Stray spaces are trimmed before the address is checked.
@@ -53,6 +55,14 @@ const signupBody = z.object({
   password: newPasswordField,
   accountType: z.enum(['local', 'tourist']),
   phone: z.string().trim().max(32).optional(),
+});
+const phonePurpose = z.enum(['sign_in', 'confirm_phone']).default('sign_in');
+const phoneStartBody = z.object({ phone: z.string().trim().min(5).max(32), purpose: phonePurpose });
+const phoneVerifyBody = z.object({
+  challengeId: z.string().max(64),
+  code: z.string().trim().regex(/^\d{4,8}$/, 'The code is the digits from the text message.'),
+  purpose: phonePurpose,
+  client: z.enum(['web', 'mobile']).default('mobile'),
 });
 const loginBody = z.object({
   email: emailField,
@@ -128,6 +138,27 @@ export default async function authRoutes(app: FastifyInstance, options: AuthRout
     const { email } = parseInput(emailOnlyBody, request.body);
     await auth.resendVerification(email);
     return reply.status(202).send(CHECK_YOUR_EMAIL);
+  });
+
+  // ---- SIGNING IN WITH A CODE BY TEXT ----
+  // See services/auth/phone.ts. The same two addresses confirm the number on a
+  // signed-in account, with "purpose": "confirm_phone".
+  app.post('/phone/start', { config: { rateLimit: AUTH_LIMITS.emailLink } }, async (request, reply) => {
+    requireFeature(config, 'phoneSignIn');
+    const { phone, purpose } = parseInput(phoneStartBody, request.body);
+    const sent = await options.phone.start({ phone, purpose, actor: request.actor, ipAddress: request.ip });
+    return reply.status(202).send(sent);
+  });
+
+  app.post('/phone/verify', { config: { rateLimit: AUTH_LIMITS.login } }, async (request, reply) => {
+    requireFeature(config, 'phoneSignIn');
+    const { challengeId, code, purpose, client } = parseInput(phoneVerifyBody, request.body);
+    const result = await options.phone.verify({ challengeId, code, purpose, actor: request.actor, client: clientInfo(request) });
+    // The same answer as signing in with a password.
+    if ('session' in result && result.session) {
+      return { user: result.user, session: deliverSession(reply, result.session, client) };
+    }
+    return { user: result.user };
   });
 
   // ---- SIGNING IN AND OUT ----
