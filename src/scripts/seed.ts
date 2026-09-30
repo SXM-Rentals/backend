@@ -54,6 +54,46 @@ if (config.databaseUrl && !force) {
   process.exit(1);
 }
 
+// Real photos of each exact model, openly licensed, from Wikimedia Commons.
+// Served through wsrv.nl, a long-running public image cache, because Wikimedia
+// refuses Android's own download client (a 403), which left every photo grey on
+// an Android phone; wsrv.nl also shrinks them to 1200 pixels across. Position 0
+// is the front three-quarter view (search shows it first), 1 the rear.
+// DEVELOPMENT ONLY, like the rest of this file: real listings use Cloudinary.
+//
+// Credits, which the CC BY-SA licences ask to travel with the photos:
+//   Kia Picanto   front and rear by Vauxford, CC BY-SA 4.0
+//                 commons.wikimedia.org/wiki/File:2017_Kia_Picanto_GT-Line_S_1.2_Front.jpg
+//                 commons.wikimedia.org/wiki/File:2017_Kia_Picanto_GT-Line_S_1.2_Rear.jpg
+//   Suzuki Jimny  front and rear by TTTNIS, CC0 (no credit needed)
+//                 commons.wikimedia.org/wiki/File:2021-2024_Suzuki_Jimny_XL.jpg
+//                 commons.wikimedia.org/wiki/File:2021-2024_Suzuki_Jimny_XL_rear.jpg
+//   Renault Clio  front and rear by Vauxford, CC BY-SA 4.0
+//                 commons.wikimedia.org/wiki/File:2019_Renault_Clio_Iconic_Front.jpg
+//                 commons.wikimedia.org/wiki/File:2019_Renault_Clio_Iconic_Rear.jpg
+//   Toyota RAV4   front and rear by Kevauto, CC BY-SA 4.0
+//                 commons.wikimedia.org/wiki/File:2019_Toyota_RAV4_XLE_AWD,_front_12.31.19.jpg
+//                 commons.wikimedia.org/wiki/File:2019_Toyota_RAV4_XLE_AWD,_rear_12.31.19.jpg
+const wsrv = (path: string) => `https://wsrv.nl/?url=upload.wikimedia.org%2Fwikipedia%2Fcommons%2Fthumb%2F${path}&w=1200&output=jpg&q=82`;
+const PHOTOS: Record<string, [string, string]> = {
+  'Kia Picanto': [
+    wsrv('b%2Fbe%2F2017_Kia_Picanto_GT-Line_S_1.2_Front.jpg%2F1280px-2017_Kia_Picanto_GT-Line_S_1.2_Front.jpg'),
+    wsrv('3%2F39%2F2017_Kia_Picanto_GT-Line_S_1.2_Rear.jpg%2F1280px-2017_Kia_Picanto_GT-Line_S_1.2_Rear.jpg'),
+  ],
+  'Suzuki Jimny': [
+    wsrv('c%2Fc5%2F2021-2024_Suzuki_Jimny_XL.jpg%2F1280px-2021-2024_Suzuki_Jimny_XL.jpg'),
+    wsrv('8%2F88%2F2021-2024_Suzuki_Jimny_XL_rear.jpg%2F1280px-2021-2024_Suzuki_Jimny_XL_rear.jpg'),
+  ],
+  'Renault Clio': [
+    wsrv('b%2Fb8%2F2019_Renault_Clio_Iconic_Front.jpg%2F1280px-2019_Renault_Clio_Iconic_Front.jpg'),
+    wsrv('a%2Fa4%2F2019_Renault_Clio_Iconic_Rear.jpg%2F1280px-2019_Renault_Clio_Iconic_Rear.jpg'),
+  ],
+  'Toyota RAV4': [
+    wsrv('6%2F6d%2F2019_Toyota_RAV4_XLE_AWD%252C_front_12.31.19.jpg%2F1280px-2019_Toyota_RAV4_XLE_AWD%252C_front_12.31.19.jpg'),
+    wsrv('6%2F64%2F2019_Toyota_RAV4_XLE_AWD%252C_rear_12.31.19.jpg%2F1280px-2019_Toyota_RAV4_XLE_AWD%252C_rear_12.31.19.jpg'),
+  ],
+};
+
 // Two businesses, one on each side of the island, with a couple of cars each.
 const BUSINESSES = [
   {
@@ -161,12 +201,11 @@ try {
         })
         .returning();
 
-      // A stand-in photo so the apps have something to draw. A public
-      // placeholder service, chosen because it needs no account and no key —
-      // fine for a development database and nowhere else.
+      // Two photos of the model itself — see PHOTOS above for where they are from.
+      const [front, rear] = PHOTOS[`${car.make} ${car.model}`]!;
       await connection.db.insert(vehiclePhotos).values([
-        { vehicleId: vehicle!.id, storageKey: `https://picsum.photos/seed/${vehicle!.reference}-1/1200/800`, position: 0 },
-        { vehicleId: vehicle!.id, storageKey: `https://picsum.photos/seed/${vehicle!.reference}-2/1200/800`, position: 1 },
+        { vehicleId: vehicle!.id, storageKey: front, position: 0 },
+        { vehicleId: vehicle!.id, storageKey: rear, position: 1 },
       ]);
     }
   }
