@@ -26,6 +26,7 @@ import { adminStaff } from './admin.js';
 import { createdAt, moment, updatedAt } from './columns.js';
 import {
   documentReviewStatus,
+  vehicleBlockReason,
   fuelType,
   islandSide,
   listingStatus,
@@ -115,6 +116,29 @@ export const vehiclePhotos = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('vehicle_photos_vehicle_idx').on(t.vehicleId)],
+);
+
+// ---- DAYS A BUSINESS HAS TAKEN A CAR OFF SALE ----
+// Servicing, a private hire, keeping it back. BOTH DATES COUNT: a one-day block
+// has the same start and end — unlike a booking, whose end date is the morning
+// the car comes back. A blocked day is simply unavailable to customers, who are
+// never told why.
+export const vehicleBlocks = pgTable(
+  'vehicle_blocks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    vehicleId: uuid('vehicle_id')
+      .notNull()
+      .references(() => vehicles.id, { onDelete: 'cascade' }),
+    startDate: date('start_date').notNull(),
+    endDate: date('end_date').notNull(),
+    reason: vehicleBlockReason('reason').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('vehicle_blocks_vehicle_idx').on(t.vehicleId, t.startDate),
+    check('vehicle_blocks_in_order', sql`${t.endDate} >= ${t.startDate}`),
+  ],
 );
 
 // ---- DECLARED ACCIDENT HISTORY ----

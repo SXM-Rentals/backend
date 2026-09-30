@@ -220,7 +220,8 @@ Everything lives under `/api/v1`.
 | GET · PATCH | `/providers/me` | The business's own record |
 | GET | `/providers/me/summary` | The dashboard headline figures |
 | GET · POST | `/providers/me/vehicles` | The whole fleet, approved or not · add a car |
-| PATCH · DELETE | `/providers/me/vehicles/:id` | Edit one · take one off the platform |
+| GET · PATCH · DELETE | `/providers/me/vehicles/:id` | One car of the fleet · edit it · take it off the platform |
+| GET · POST · DELETE | `/providers/me/vehicles/:id/blocks…` | Days the business takes a car off sale (customers only see them as taken) |
 | POST | `/providers/me/vehicles/:id/photos/upload-ticket` | Permission to upload one photo, straight to Cloudinary |
 | GET · POST | `/providers/me/vehicles/:id/photos` | Its photos · record one that was just uploaded |
 | PATCH · DELETE | `/providers/me/vehicles/:id/photos…` | Reorder them (first is the cover) · remove one |

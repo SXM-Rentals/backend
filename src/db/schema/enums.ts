@@ -50,6 +50,8 @@ export const fuelType = pgEnum('fuel_type', ['petrol', 'diesel', 'hybrid', 'elec
 export const listingStatus = pgEnum('listing_status', ['live', 'pending_review', 'suspended']);
 export const vehicleDocumentKind = pgEnum('vehicle_document_kind', ['registration', 'insurance', 'roadworthiness']);
 export const documentReviewStatus = pgEnum('document_review_status', ['pending', 'approved', 'rejected']);
+// Why a business took a car off sale for some days. Never shown to customers.
+export const vehicleBlockReason = pgEnum('vehicle_block_reason', ['servicing', 'private_hire', 'held_back', 'other']);
 
 // ---- BOOKINGS AND MONEY ----
 export const bookingStatus = pgEnum('booking_status', ['upcoming', 'active', 'completed', 'cancelled']);

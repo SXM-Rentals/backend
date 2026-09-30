@@ -19,6 +19,8 @@
 //   POST   /providers/me/vehicles        add a car (waits for staff approval)
 //   PATCH  /providers/me/vehicles/:id    edit one
 //   DELETE /providers/me/vehicles/:id    take one off the platform
+//   GET    /providers/me/vehicles/:id    one of them, approved or not
+//   GET · POST · DELETE /providers/me/vehicles/:id/blocks…   days taken off sale
 //   GET    /providers/me/performance     how each car is doing
 //   GET    /providers/me/bookings        bookings across the fleet
 //   GET    /providers/me/bookings/:id    one of them
@@ -46,6 +48,7 @@ import { isUuid } from '../../lib/ownership.js';
 import type { PhotoStorage } from '../../lib/storage.js';
 import type { PushService } from '../../services/push/index.js';
 import type { DateChangeService } from '../../services/date-changes/index.js';
+import { addBlock, listBlocks, removeBlock } from '../../services/vehicle-blocks/index.js';
 import { requireFeature } from '../../services/capabilities/index.js';
 import { threadOptionsBody } from '../messages/index.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
@@ -68,6 +71,7 @@ import {
   getPayoutAccount,
   getProviderBooking,
   getSummary,
+  getFleetVehicle,
   listFleet,
   listPayouts,
   listPerformance,
@@ -110,6 +114,12 @@ const payoutStartBody = z.object({ returnTo: z.enum(['app', 'web']).optional() }
 const dateChangeParams = z.object({ id: z.string().max(64), requestId: z.string().max(64) });
 // The business's own words, shown to the renter as written.
 const declineBody = z.object({ note: z.string().trim().max(500).optional() });
+const blockBody = z.object({
+  startDate: z.iso.date(),
+  endDate: z.iso.date(),
+  reason: z.enum(['servicing', 'private_hire', 'held_back', 'other']),
+});
+const blockParams = z.object({ id: z.string().max(64), blockId: z.string().max(64) });
 // Only an address, and only one that storage recognises as this car's — the
 // check that matters happens in the service, not here.
 const photoBody = z.object({ url: z.url().max(500) });
@@ -292,6 +302,36 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const body = parseInput(vehicleBody, request.body);
     const vehicle = await addVehicle(db, providerId, body);
     return reply.status(201).send(vehicle);
+  });
+
+  app.get('/me/vehicles/:id', async (request) => {
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    return getFleetVehicle(db, providerId, id);
+  });
+
+  // ---- DAYS TAKEN OFF SALE ----
+  app.get('/me/vehicles/:id/blocks', async (request) => {
+    requireFeature(config, 'blockedDays');
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    return listBlocks(db, providerId, id);
+  });
+
+  app.post('/me/vehicles/:id/blocks', async (request, reply) => {
+    requireFeature(config, 'blockedDays');
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const block = await addBlock(db, providerId, id, parseInput(blockBody, request.body));
+    return reply.status(201).send(block);
+  });
+
+  app.delete('/me/vehicles/:id/blocks/:blockId', async (request, reply) => {
+    requireFeature(config, 'blockedDays');
+    const { providerId } = await businessFor(request);
+    const { id, blockId } = parseInput(blockParams, request.params);
+    await removeBlock(db, providerId, id, blockId);
+    return reply.status(204).send();
   });
 
   app.patch('/me/vehicles/:id', async (request) => {

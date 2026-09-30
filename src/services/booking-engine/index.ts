@@ -199,7 +199,9 @@ export async function createBooking(
     await tx.select({ id: vehicles.id }).from(vehicles).where(eq(vehicles.id, vehicle.id)).for('update');
 
     if (!(await isVehicleFree(tx, vehicle.id, input.startDate, input.endDate))) {
-      throw conflict('vehicle_unavailable', 'Sorry — this vehicle has just been booked for those dates.');
+      // Booked by somebody else, or a day the business took it off sale — the
+      // customer is not told which.
+      throw conflict('vehicle_unavailable', 'Sorry — this vehicle is not available on all of those dates.');
     }
 
     // A reference clash is vanishingly unlikely, but retrying is cheap.

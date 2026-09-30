@@ -317,6 +317,19 @@ export async function listFleet(db: Database, providerId: string) {
     .from(vehicles)
     .where(and(eq(vehicles.providerId, providerId), isNull(vehicles.deletedAt)))
     .orderBy(desc(vehicles.createdAt));
+  return fleetView(db, rows);
+}
+
+// One car of the fleet, approved or not, in the same shape as the list.
+export async function getFleetVehicle(db: Database, providerId: string, vehicleId: string) {
+  const vehicle = await loadOwnVehicle(db, providerId, vehicleId);
+  const [view] = await fleetView(db, [vehicle]);
+  return view!;
+}
+
+// The business's own view of some of its cars. Its unavailable days include
+// days it blocked itself; the app takes the blocks away to show booked days.
+async function fleetView(db: Database, rows: (typeof vehicles.$inferSelect)[]) {
   if (rows.length === 0) return [];
 
   const ids = rows.map((row) => row.id);

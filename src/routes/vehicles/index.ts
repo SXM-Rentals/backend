@@ -107,6 +107,13 @@ export default async function vehicleRoutes(app: FastifyInstance, options: Vehic
             and bookings.start_date < ${filters.endDate}
             and bookings.end_date > ${filters.startDate}
         )`,
+        // Nor has the business blocked any of those days (a block's end counts).
+        sql`not exists (
+          select 1 from vehicle_blocks
+          where vehicle_blocks.vehicle_id = ${vehicles.id}
+            and vehicle_blocks.start_date < ${filters.endDate}
+            and vehicle_blocks.end_date >= ${filters.startDate}
+        )`,
       );
     }
 

@@ -87,7 +87,7 @@ const FEATURES: Record<FeatureName, Feature> = {
   bookingSystem: { built: false },
   uploadRequest: { built: false },
   promotions: { built: false },
-  blockedDays: { built: false },
+  blockedDays: { built: true },
   deleteNotifications: { built: true },
   dataExport: { built: true },
   messageOptions: { built: true },

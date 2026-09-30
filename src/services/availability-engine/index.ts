@@ -11,10 +11,14 @@
 // bookings clash only when one starts before the other ends.
 //
 // A cancelled booking never blocks anything.
+//
+// DAYS A BUSINESS BLOCKED count as taken too — the car is in the garage, or
+// out on a private hire. A block includes BOTH its dates, so a rental clashes
+// with one when any of the rental's nights falls on a blocked day.
 
-import { and, eq, gt, lt, ne, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, lt, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { bookings } from '../../db/schema/index.js';
+import { bookings, vehicleBlocks } from '../../db/schema/index.js';
 
 // How far ahead the "already booked" days are listed for a car's page.
 export const AVAILABILITY_HORIZON_DAYS = 180;
@@ -41,6 +45,11 @@ export function today(): string {
 // How many days a rental runs for: the 1st to the 4th is 3.
 export function countRentalDays(startDate: string, endDate: string): number {
   return Math.round((parseDate(endDate) - parseDate(startDate)) / DAY_MS);
+}
+
+// The day after a date: the 14th gives the 15th.
+export function dayAfter(value: string): string {
+  return formatDate(parseDate(value) + DAY_MS);
 }
 
 // Every day a rental occupies: the 1st to the 4th gives the 1st, 2nd and 3rd.
@@ -78,7 +87,18 @@ export async function isVehicleFree(
       ),
     )
     .limit(1);
-  return clash === undefined;
+  if (clash) return false;
+
+  // A night of the rental on a blocked day. The rental uses the nights from its
+  // start up to (not including) its end; the block covers start to end, both in.
+  const [blocked] = await db
+    .select({ id: vehicleBlocks.id })
+    .from(vehicleBlocks)
+    .where(
+      and(eq(vehicleBlocks.vehicleId, vehicleId), lt(vehicleBlocks.startDate, endDate), gte(vehicleBlocks.endDate, startDate)),
+    )
+    .limit(1);
+  return blocked === undefined;
 }
 
 // ---- WHICH DAYS ARE ALREADY TAKEN ----
@@ -112,6 +132,27 @@ export async function unavailableDatesFor(
     const days = taken.get(row.vehicleId);
     if (!days) continue;
     for (const day of daysBetween(row.startDate, row.endDate)) {
+      if (day >= from && day < until) days.push(day);
+    }
+  }
+
+  // Blocked days, listed exactly like booked ones: a customer sees a day they
+  // cannot have, never the reason.
+  const blocks = await db
+    .select({ vehicleId: vehicleBlocks.vehicleId, startDate: vehicleBlocks.startDate, endDate: vehicleBlocks.endDate })
+    .from(vehicleBlocks)
+    .where(
+      and(
+        sql`${vehicleBlocks.vehicleId} in ${vehicleIds}`,
+        lt(vehicleBlocks.startDate, until),
+        gte(vehicleBlocks.endDate, from),
+      ),
+    );
+  for (const block of blocks) {
+    const days = taken.get(block.vehicleId);
+    if (!days) continue;
+    // Both dates count, so the day after the end is where the listing stops.
+    for (const day of daysBetween(block.startDate, dayAfter(block.endDate))) {
       if (day >= from && day < until) days.push(day);
     }
   }
