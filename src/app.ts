@@ -44,6 +44,8 @@ import paymentRoutes from './routes/payments/index.js';
 import providerRoutes from './routes/providers/index.js';
 import vehicleRoutes from './routes/vehicles/index.js';
 import webhookRoutes from './routes/webhooks/index.js';
+import verificationRoutes from './routes/verification/index.js';
+import { createVerificationService } from './services/verification/index.js';
 import { createAdminAuthService } from './services/admin/auth.js';
 import { createAdminService } from './services/admin/index.js';
 import { createAdminStaffService } from './services/admin/staff.js';
@@ -150,6 +152,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl, social: config.socialAccounts },
   });
   const payments = createPaymentService({ db, gateway, logger: app.log, notifications });
+  // Identity checks: Stripe Identity or staff, as the owner chooses.
+  const verification = createVerificationService({ db, config, gateway, notifications, logger: app.log });
   const admin = createAdminService({ db, gateway, payments });
   // Staff accounts, managed from the panel. It borrows the sign-in service's
   // lockout counters and session-ending, so there is one of each.
@@ -170,13 +174,22 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(customerRoutes, { prefix: '/customers', auth, config });
       await api.register(vehicleRoutes, { prefix: '/vehicles', db });
       await api.register(providerRoutes, { prefix: '/providers', db, gateway, config, storage });
-      await api.register(bookingRoutes, { prefix: '/bookings', db, notifications });
+      await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification });
+      await api.register(verificationRoutes, { prefix: '/verification', config, verification });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications });
       await api.register(messageRoutes, { prefix: '/messages', db });
       await api.register(paymentRoutes, { prefix: '/payments', payments, config });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
-      await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway });
-      await api.register(adminRoutes, { prefix: '/admin', db, config, admin, adminAuth, staffAccounts });
+      await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway, verification });
+      await api.register(adminRoutes, {
+        prefix: '/admin',
+        db,
+        config,
+        admin,
+        adminAuth,
+        staffAccounts,
+        verification,
+      });
       // Later phases register verification, rewards, notifications, ... here.
     },
     { prefix: '/api/v1' },

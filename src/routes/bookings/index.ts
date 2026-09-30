@@ -30,8 +30,13 @@ import {
   signAgreement,
 } from '../../services/booking-engine/index.js';
 import type { NotificationService } from '../../services/notifications/index.js';
+import type { VerificationService } from '../../services/verification/index.js';
 
-export type BookingRouteOptions = { db: Database; notifications: NotificationService };
+export type BookingRouteOptions = {
+  db: Database;
+  notifications: NotificationService;
+  verification: VerificationService;
+};
 
 // A time of day as the apps send it, e.g. "10:00".
 const timeField = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Please give a time like 10:00.');
@@ -77,6 +82,9 @@ export default async function bookingRoutes(app: FastifyInstance, options: Booki
   app.post('/', async (request, reply) => {
     const actor = requireCustomer(request);
     const body = parseInput(createBody, request.body);
+    // With identity checks switched on, only an approved customer books. The
+    // phone checks too, but only this check cannot be skipped.
+    await options.verification.assertMayBook(actor);
     const booking = await createBooking(db, actor, body, notifications);
     return reply.status(201).send(booking);
   });

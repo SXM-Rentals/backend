@@ -124,6 +124,12 @@ export type PaymentGateway = {
   // turns into "not found", exactly like a card that does not exist.
   removeCard(stripeCustomerId: string, cardId: string): Promise<boolean>;
   setDefaultCard(stripeCustomerId: string, cardId: string): Promise<boolean>;
+
+  // ---- IDENTITY CHECKS ----
+  // A check on Stripe's own page: the person photographs their ID and takes a
+  // selfie there, and the photos go to Stripe, never to us.
+  createIdentitySession(input: { customerId: string; returnUrl: string }): Promise<{ id: string; url: string }>;
+  getIdentitySession(sessionId: string): Promise<{ id: string; status: string; url: string | null } | null>;
 };
 
 // Raised when the endpoints are used before Stripe has been connected.
@@ -324,6 +330,27 @@ export function createStripeGateway(options: {
       return true;
     },
 
+    // ---- IDENTITY CHECKS ----
+    async createIdentitySession(input) {
+      const session = await stripe.identity.verificationSessions.create({
+        type: 'document',
+        options: { document: { require_matching_selfie: true } },
+        return_url: input.returnUrl,
+        // How the outcome is matched back to the account when Stripe reports it.
+        metadata: { customerId: input.customerId },
+      });
+      return { id: session.id, url: session.url ?? '' };
+    },
+
+    async getIdentitySession(sessionId) {
+      try {
+        const session = await stripe.identity.verificationSessions.retrieve(sessionId);
+        return { id: session.id, status: session.status, url: session.url ?? null };
+      } catch {
+        return null;
+      }
+    },
+
     verifyWebhook(rawBody, signature) {
       if (!options.webhookSecret) throw notConfigured();
       if (!signature) {
@@ -371,6 +398,8 @@ export function createUnconfiguredGateway(): PaymentGateway {
     listCards: refuse,
     removeCard: refuse,
     setDefaultCard: refuse,
+    createIdentitySession: refuse,
+    getIdentitySession: refuse,
     verifyWebhook() {
       throw notConfigured();
     },

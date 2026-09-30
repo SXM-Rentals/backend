@@ -43,6 +43,9 @@ export const customers = pgTable(
     // saved cards live there, never here. Removed at Stripe when the account
     // closes (the daily job does it), taking every saved card with it.
     stripeCustomerId: text('stripe_customer_id'),
+    // The identity check in progress at Stripe, if one was started. Only its
+    // id is kept; the photos stay with Stripe.
+    identitySessionId: text('identity_session_id'),
 
     // Set when the account is closed. The row stays so the audit trail and
     // past bookings still point at something real.

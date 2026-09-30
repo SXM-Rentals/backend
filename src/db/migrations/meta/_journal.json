@@ -64,6 +64,13 @@
       "when": 1790784480370,
       "tag": "0008_saved_cards",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790785713571,
+      "tag": "0009_identity_checks",
+      "breakpoints": true
     }
   ]
 }

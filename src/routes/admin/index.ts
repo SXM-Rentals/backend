@@ -34,6 +34,7 @@ import type { AdminAuthService } from '../../services/admin/auth.js';
 import { listAudit } from '../../services/admin/audit.js';
 import type { AdminService } from '../../services/admin/index.js';
 import type { AdminStaffService } from '../../services/admin/staff.js';
+import type { VerificationService } from '../../services/verification/index.js';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../lib/passwords.js';
 import type { Database } from '../../db/client.js';
 
@@ -43,6 +44,7 @@ export type AdminRouteOptions = {
   admin: AdminService;
   adminAuth: AdminAuthService;
   staffAccounts: AdminStaffService;
+  verification: VerificationService;
 };
 
 // ---- WHAT EACH REQUEST MAY CONTAIN ----
@@ -58,6 +60,11 @@ const loginBody = z.object({
 const mfaBody = z.object({ code: z.string().trim().min(6).max(10) });
 const decisionBody = z.object({ approve: z.boolean(), reason });
 const reasonOnlyBody = z.object({ reason });
+const identityDecisionBody = z.object({
+  decision: z.enum(['approved', 'rejected', 'resubmit']),
+  reason,
+  customerMessage: z.string().trim().min(3).max(500).optional(),
+});
 const claimBody = z.object({ amount: z.number().positive().max(100_000), reason });
 const pointsBody = z.object({ points: z.number().int(), reason });
 const userPatchBody = z.object({
@@ -363,6 +370,16 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(pointsBody, request.body);
     return admin.adjustPoints(actor, id, body);
+  });
+
+  // A customer's identity check, decided by staff: how checks are made when the
+  // owner chooses staff over Stripe, and how Stripe's answer is overturned.
+  // `customerMessage` is what the person is told; `reason` is for the log.
+  app.post('/users/:id/verification', async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(identityDecisionBody, request.body);
+    return options.verification.decideByStaff(actor, id, body);
   });
 
   app.delete('/users/:id', async (request, reply) => {

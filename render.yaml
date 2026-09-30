@@ -125,3 +125,6 @@ services:
         sync: false
       - key: FEATURES_OFF
         sync: false
+      # "staff" or "stripe" — how identity checks are made once switched on.
+      - key: IDENTITY_METHOD
+        sync: false

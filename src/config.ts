@@ -67,6 +67,10 @@ const envSchema = z
     FEATURES: z.string().default(''),
     // Names taken back out of "all", for switching one feature off in a hurry.
     FEATURES_OFF: z.string().default(''),
+    // How identity checks are made once switched on: "stripe" (Stripe
+    // Identity's own page; costs per check) or "staff" (decided in the admin
+    // panel). Staff until the owner says otherwise — it costs nothing.
+    IDENTITY_METHOD: z.enum(['stripe', 'staff']).default('staff'),
   })
   // Production has stricter rules than a developer's laptop.
   .superRefine((env, ctx) => {
@@ -122,6 +126,7 @@ export type Config = {
   // The owner's feature switches. See services/capabilities.
   featuresOn: 'all' | string[];
   featuresOff: string[];
+  identityMethod: 'stripe' | 'staff';
 };
 
 // Turns "a, b ,c" into ["a", "b", "c"], dropping blanks.
@@ -180,5 +185,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     logLevel: env.LOG_LEVEL,
     featuresOn: env.FEATURES.trim().toLowerCase() === 'all' ? 'all' : splitList(env.FEATURES),
     featuresOff: splitList(env.FEATURES_OFF),
+    identityMethod: env.IDENTITY_METHOD,
   };
 }

@@ -23,8 +23,10 @@ export function toUser(customer: CustomerRow): User {
       selfieDone: customer.selfieDone,
       licenseDone: customer.licenseDone,
       identityDocDone: customer.identityDocDone,
-      // The reason is only ever shown for a rejection.
-      ...(customer.verificationStatus === 'rejected' && customer.verificationReason
+      // The reason is shown for a rejection, and for "please try again" — in
+      // both cases it was written for this person to read.
+      ...((customer.verificationStatus === 'rejected' || customer.verificationStatus === 'resubmit') &&
+      customer.verificationReason
         ? { reason: customer.verificationReason }
         : {}),
       ...(customer.verificationSubmittedAt ? { submittedAt: customer.verificationSubmittedAt.toISOString() } : {}),

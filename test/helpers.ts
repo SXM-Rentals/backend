@@ -104,6 +104,10 @@ export type FakeGateway = PaymentGateway & {
   transfers: { accountId: string; amountCents: number; reference: string }[];
   // Stripe customers and the cards saved on them.
   stripeCustomers: Map<string, { customerId: string; cards: SavedCard[]; deleted: boolean }>;
+  // Identity checks started at the stand-in Stripe, and their state.
+  identitySessions: Map<string, { customerId: string; status: string }>;
+  // Builds the message Stripe sends when an identity check moves on.
+  identityEventFor(sessionId: string, type: string, lastErrorReason?: string): WebhookEvent;
   // What Stripe's form does when somebody saves a card: puts it on the customer.
   saveCard(stripeCustomerId: string, card: { brand: string; last4: string }): string;
   // Builds the message Stripe would send about a payment.
@@ -133,6 +137,39 @@ export function createFakeGateway(): FakeGateway {
     accounts: new Map(),
     transfers: [],
     stripeCustomers: new Map(),
+    identitySessions: new Map(),
+
+    async createIdentitySession(input) {
+      counter += 1;
+      const id = `vs_${counter}`;
+      gateway.identitySessions.set(id, { customerId: input.customerId, status: 'requires_input' });
+      return { id, url: `https://verify.stripe.test/start/${id}` };
+    },
+    async getIdentitySession(sessionId) {
+      const session = gateway.identitySessions.get(sessionId);
+      if (!session) return null;
+      return {
+        id: sessionId,
+        status: session.status,
+        url: session.status === 'requires_input' ? `https://verify.stripe.test/start/${sessionId}` : null,
+      };
+    },
+    identityEventFor(sessionId, type, lastErrorReason) {
+      const session = gateway.identitySessions.get(sessionId);
+      if (session) session.status = type.split('.').at(-1)!;
+      counter += 1;
+      return {
+        id: `evt_${counter}`,
+        type,
+        data: {
+          object: {
+            id: sessionId,
+            metadata: { customerId: session?.customerId ?? '' },
+            ...(lastErrorReason ? { last_error: { reason: lastErrorReason } } : {}),
+          },
+        },
+      };
+    },
 
     saveCard(stripeCustomerId, card) {
       counter += 1;

@@ -162,6 +162,7 @@ Everything lives under `/api/v1`.
 |---|---|---|
 | GET | `/health` | Is the API up and can it reach the database |
 | GET | `/capabilities` | Which features are switched on — only `true` and `false`, public |
+| POST | `/verification/sessions` | Start an identity check on Stripe Identity's own page |
 | POST | `/auth/signup` | Create an account; a confirmation link is emailed |
 | POST | `/auth/verify-email` | Confirm the email with the link's code |
 | POST | `/auth/verify-email/resend` | Send a new confirmation link |
@@ -221,6 +222,7 @@ Everything lives under `/api/v1`.
 | GET | `/admin/summary` · `/admin/queue` · `/admin/audit` | The dashboard, what is waiting, who changed what |
 | GET | `/admin/analytics` | Money, bookings and sign-ups over time (`?months=` or `?from=&to=`) |
 | GET · PATCH · DELETE | `/admin/users…` | Customers: read, change one field, adjust points, close |
+| POST | `/admin/users/:id/verification` | Decide a customer's identity check, with a reason |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |

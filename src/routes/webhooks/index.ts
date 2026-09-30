@@ -23,8 +23,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import type { PaymentService } from '../../services/payments/index.js';
+import type { VerificationService } from '../../services/verification/index.js';
 
-export type WebhookRouteOptions = { payments: PaymentService; gateway: PaymentGateway };
+export type WebhookRouteOptions = {
+  payments: PaymentService;
+  gateway: PaymentGateway;
+  verification: VerificationService;
+};
 
 export default async function webhookRoutes(app: FastifyInstance, options: WebhookRouteOptions) {
   const { payments, gateway } = options;
@@ -36,6 +41,11 @@ export default async function webhookRoutes(app: FastifyInstance, options: Webho
 
   app.post('/stripe', async (request, reply) => {
     const event = gateway.verifyWebhook(request.body as Buffer, request.headers['stripe-signature'] as string);
+    // An identity check moving on is not a payment, so it has its own handler.
+    // Its changes are safe to repeat, so a message Stripe sends twice is harmless.
+    if (await options.verification.applyStripeEvent(event)) {
+      return reply.status(200).send({ received: true, handled: true });
+    }
     const result = await payments.handleStripeEvent(event);
 
     // Answering 200 tells Stripe not to send it again. A message we refused to
