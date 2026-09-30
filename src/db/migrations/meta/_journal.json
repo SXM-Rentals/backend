@@ -120,6 +120,13 @@
       "when": 1790803909228,
       "tag": "0016_business_promotions",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790804424576,
+      "tag": "0017_fleet_imports",
+      "breakpoints": true
     }
   ]
 }

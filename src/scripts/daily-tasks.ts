@@ -20,10 +20,10 @@
 //
 // It does NOT send money. Sending is a separate, deliberate step.
 
-import { and, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lt } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { connectDatabase } from '../db/client.js';
-import { bookings, customers, providers } from '../db/schema/index.js';
+import { bookings, customers, fleetImports, providers } from '../db/schema/index.js';
 import { createStripeGateway } from '../lib/stripe.js';
 import { createDisabledPushSender, createExpoPushSender } from '../lib/push.js';
 import { createPushService } from '../services/push/index.js';
@@ -67,6 +67,14 @@ try {
   // Phones whose app has been removed stop being sent to.
   const receipts = await push.checkReceipts();
   console.log(`Push receipts: ${receipts.checked} checked, ${receipts.removed} phone(s) no longer registered and removed.`);
+
+  // Spreadsheets read for an import and never confirmed. They hold a
+  // business's fleet details, so they are not kept past their hour for long.
+  const clearedImports = await connection.db
+    .delete(fleetImports)
+    .where(lt(fleetImports.expiresAt, new Date(Date.now() - 24 * 60 * 60 * 1000)))
+    .returning({ id: fleetImports.id });
+  console.log(`Fleet imports: ${clearedImports.length} old ones cleared.`);
 
   // Requests for new dates that nobody answered in time.
   const expired = await expireUnansweredDateChanges(connection.db);

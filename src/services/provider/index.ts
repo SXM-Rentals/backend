@@ -450,7 +450,10 @@ async function replaceAccidentHistory(db: Database, vehicleId: string, records: 
 export async function addVehicle(db: Database, providerId: string, input: VehicleInput) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      const [vehicle] = await db
+      // In its own savepoint, so a clash can be retried even when this runs
+      // inside a larger transaction (a spreadsheet import).
+      const [vehicle] = await db.transaction(async (attempt) =>
+        attempt
         .insert(vehicles)
         .values({
           reference: `SXM-V-${100 + Math.floor(Math.random() * 9900)}`,
@@ -483,7 +486,8 @@ export async function addVehicle(db: Database, providerId: string, input: Vehicl
           accidentHistoryDeclared: input.accidentHistoryDeclared ?? Boolean(input.accidentHistory?.length),
           listingStatus: 'pending_review',
         })
-        .returning();
+        .returning(),
+      );
       if (vehicle) {
         if (input.accidentHistory?.length) await replaceAccidentHistory(db, vehicle.id, input.accidentHistory);
         const accidents = input.accidentHistory?.length

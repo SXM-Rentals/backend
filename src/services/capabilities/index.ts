@@ -83,7 +83,7 @@ const FEATURES: Record<FeatureName, Feature> = {
   refunds: { built: true },
   dateChanges: { built: true },
   agreementDrawing: { built: false },
-  fleetImport: { built: false },
+  fleetImport: { built: true },
   bookingSystem: { built: false },
   uploadRequest: { built: false },
   promotions: { built: true },

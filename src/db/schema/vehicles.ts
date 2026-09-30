@@ -17,6 +17,7 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   uniqueIndex,
@@ -128,6 +129,26 @@ export const vehiclePhotos = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('vehicle_photos_vehicle_idx').on(t.vehicleId)],
+);
+
+// ---- A SPREADSHEET OF CARS, READ BUT NOT YET ADDED ----
+// Step 1 of importing reads the file and keeps every row, checked, for an hour;
+// step 2 adds the rows the business picks. addedRows is what makes confirming
+// twice add nothing twice.
+export const fleetImports = pgTable(
+  'fleet_imports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    fileName: text('file_name').notNull(),
+    rows: jsonb('rows').$type<unknown[]>().notNull(),
+    addedRows: jsonb('added_rows').$type<number[]>().notNull().default([]),
+    expiresAt: moment('expires_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('fleet_imports_provider_idx').on(t.providerId)],
 );
 
 // ---- DAYS A BUSINESS HAS TAKEN A CAR OFF SALE ----

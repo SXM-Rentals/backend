@@ -221,6 +221,8 @@ Everything lives under `/api/v1`.
 | GET | `/providers/me/summary` | The dashboard headline figures |
 | GET · POST | `/providers/me/vehicles` | The whole fleet, approved or not · add a car |
 | GET · PATCH · DELETE | `/providers/me/vehicles/:id` | One car of the fleet · edit it · take it off the platform |
+| GET | `/providers/import-template.csv` | The spreadsheet template for adding cars (public, headings only) |
+| POST | `/providers/me/vehicles/import` · `/import/:importId/confirm` | Read a .csv or .xlsx of cars and check every row · add the rows picked |
 | GET · POST · DELETE | `/providers/me/vehicles/:id/blocks…` | Days the business takes a car off sale (customers only see them as taken) |
 | POST | `/providers/me/vehicles/:id/photos/upload-ticket` | Permission to upload one photo, straight to Cloudinary |
 | GET · POST | `/providers/me/vehicles/:id/photos` | Its photos · record one that was just uploaded |

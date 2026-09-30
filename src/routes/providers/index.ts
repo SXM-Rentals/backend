@@ -49,6 +49,7 @@ import type { PhotoStorage } from '../../lib/storage.js';
 import type { PushService } from '../../services/push/index.js';
 import type { DateChangeService } from '../../services/date-changes/index.js';
 import { addBlock, listBlocks, removeBlock } from '../../services/vehicle-blocks/index.js';
+import { confirmImport, importTemplateCsv, readImport } from '../../services/fleet-import/index.js';
 import {
   createPromotion,
   deletePromotion,
@@ -135,6 +136,13 @@ const promotionBody = z.object({
   maxUses: z.number().int().min(1).max(100_000).optional(),
 });
 const promotionPatchBody = z.object({ active: z.boolean() });
+// A file sent inside JSON, as base64. The size is checked again once decoded.
+const uploadBody = z.object({
+  fileName: z.string().trim().min(1).max(200),
+  contentBase64: z.string().min(1).max(1_000_000),
+});
+const importParams = z.object({ importId: z.string().max(64) });
+const confirmBody = z.object({ rowNumbers: z.array(z.number().int().min(1).max(100_000)).min(1).max(200) });
 // Only an address, and only one that storage recognises as this car's — the
 // check that matters happens in the service, not here.
 const photoBody = z.object({ url: z.url().max(500) });
@@ -336,6 +344,32 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { providerId } = await businessFor(request);
     const { id } = parseInput(idParam, request.params);
     return getFleetVehicle(db, providerId, id);
+  });
+
+  // ---- ADDING CARS FROM A SPREADSHEET ----
+  // The template is public: it holds nothing but the column headings.
+  app.get('/import-template.csv', async (_request, reply) => {
+    return reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', 'attachment; filename="sxm-rentals-fleet-template.csv"')
+      .send(importTemplateCsv());
+  });
+
+  // Step 1: read the file and check every row. Nothing is saved as a car.
+  app.post('/me/vehicles/import', { bodyLimit: 1_100_000 }, async (request, reply) => {
+    requireFeature(config, 'fleetImport');
+    const { providerId } = await businessFor(request);
+    const result = await readImport(db, providerId, parseInput(uploadBody, request.body));
+    return reply.status(201).send(result);
+  });
+
+  // Step 2: add the rows the business picked.
+  app.post('/me/vehicles/import/:importId/confirm', async (request, reply) => {
+    requireFeature(config, 'fleetImport');
+    const { providerId } = await businessFor(request);
+    const { importId } = parseInput(importParams, request.params);
+    const { rowNumbers } = parseInput(confirmBody, request.body);
+    return reply.status(201).send(await confirmImport(db, providerId, importId, rowNumbers));
   });
 
   // ---- ITS OWN DISCOUNT CODES ----
