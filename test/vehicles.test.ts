@@ -115,7 +115,8 @@ describe('searching for a car', () => {
       unavailableDates: [],
     });
     // Delivery is free, so no fee is ever reported to a screen.
-    expect(jimny.deliveryFee).toBeUndefined();
+    // Delivered, for $25 — the business's own fee.
+    expect(jimny.deliveryFee).toBe(25);
     expect(jimny.deliveryAvailable).toBe(true);
     // Photos come in the order the business set.
     expect(jimny.photos).toEqual(['jimny-side.jpg', 'jimny-front.jpg']);

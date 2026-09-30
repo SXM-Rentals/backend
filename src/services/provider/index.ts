@@ -359,6 +359,8 @@ export type VehicleInput = {
   maximumDays?: number | undefined;
   airConditioning?: boolean | undefined;
   deliveryAvailable?: boolean | undefined;
+  // Dollars, per rental. 0 or missing: free delivery.
+  deliveryFee?: number | undefined;
   description?: string | undefined;
   accidentHistory?: AccidentRecordInput[] | undefined;
 };
@@ -417,6 +419,7 @@ export async function addVehicle(db: Database, providerId: string, input: Vehicl
           pickupTown: input.pickupTown,
           side: input.side,
           deliveryAvailable: input.deliveryAvailable ?? false,
+          deliveryFeeCents: input.deliveryFee ? Math.round(input.deliveryFee * 100) : null,
           latitude: input.latitude,
           longitude: input.longitude,
           description: input.description ?? '',
@@ -497,6 +500,10 @@ export async function updateVehicle(db: Database, providerId: string, vehicleId:
     ...(patch.latitude !== undefined ? { latitude: patch.latitude } : {}),
     ...(patch.longitude !== undefined ? { longitude: patch.longitude } : {}),
     ...(patch.deliveryAvailable !== undefined ? { deliveryAvailable: patch.deliveryAvailable } : {}),
+    // 0 makes delivery free again; there is no separate "remove the fee".
+    ...(patch.deliveryFee !== undefined
+      ? { deliveryFeeCents: patch.deliveryFee ? Math.round(patch.deliveryFee * 100) : null }
+      : {}),
     ...(patch.airConditioning !== undefined ? { airConditioning: patch.airConditioning } : {}),
     ...(patch.seats !== undefined ? { seats: patch.seats } : {}),
     ...(patch.doors !== undefined ? { doors: patch.doors } : {}),

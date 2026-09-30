@@ -89,10 +89,9 @@ export type Vehicle = {
   depositIsVehicleSpecific: boolean;
   pickupTown: string;
   side: 'dutch' | 'french';
-  // Delivery is free, so there is no delivery fee field here. The apps' own
-  // copy of this type still has an optional `deliveryFee`; it is simply never
-  // sent.
   deliveryAvailable: boolean;
+  // Only on a car that is delivered. 0 means the business delivers for free.
+  deliveryFee?: number;
   latitude: number;
   longitude: number;
   rating: number;

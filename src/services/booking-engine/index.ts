@@ -107,11 +107,17 @@ export function quoteBooking(
     });
   }
 
-  // DELIVERY IS FREE. A business can still bring the car to the customer, and
-  // nothing is charged for it. There is deliberately no delivery price line.
-  const rentalCents = lines.reduce((sum, line) => sum + line.amountCents, 0);
+  // DELIVERY, WHEN IT WAS ASKED FOR AND THE BUSINESS CHARGES FOR IT. Each
+  // business sets its own fee per car; no fee means it delivers for free, and
+  // then there is no line at all rather than a line saying $0. It is part of
+  // what the business sells, so commission is taken on it like the rental, and
+  // the service fee is worked out on it too.
+  if (input.collection === 'delivery' && vehicle.deliveryFeeCents && vehicle.deliveryFeeCents > 0) {
+    lines.push({ label: 'Delivery', amountCents: vehicle.deliveryFeeCents });
+  }
+  const beforeFeeCents = lines.reduce((sum, line) => sum + line.amountCents, 0);
 
-  lines.push({ label: 'Service fee', amountCents: Math.round(rentalCents * SERVICE_FEE_RATE) });
+  lines.push({ label: 'Service fee', amountCents: Math.round(beforeFeeCents * SERVICE_FEE_RATE) });
 
   const grossCents = lines.reduce((sum, line) => sum + line.amountCents, 0);
   const commissionCents = Math.round((grossCents * rateBps) / 10_000);

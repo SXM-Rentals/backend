@@ -74,7 +74,9 @@ export const vehicles = pgTable(
     pickupTown: text('pickup_town').notNull(),
     side: islandSide('side').notNull(),
     deliveryAvailable: boolean('delivery_available').notNull().default(false),
-    // UNUSED: delivery is free, so nothing reads or charges this. Kept so the
+    // What the business charges to bring the car to the customer, per rental.
+    // Null or 0 means it delivers for free. Charged as its own line on the
+    // quote, with commission taken on it like the rental. Kept so the
     // decision can be reversed without rebuilding the table.
     deliveryFeeCents: integer('delivery_fee_cents'),
     latitude: doublePrecision('latitude').notNull(),

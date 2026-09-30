@@ -157,6 +157,9 @@ const vehicleBody = z.object({
   maximumDays: z.number().int().min(1).max(365).optional(),
   airConditioning: z.boolean().optional(),
   deliveryAvailable: z.boolean().optional(),
+  // What bringing the car to the customer costs, per rental, in dollars. 0 is
+  // free delivery.
+  deliveryFee: z.number().min(0).max(1_000).optional(),
   description: z.string().trim().max(2000).optional(),
   // What the business declares about the car's past. Sent as the whole list,
   // because that is how the form shows it. Capped so one car cannot carry a

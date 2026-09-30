@@ -126,7 +126,7 @@ describe('what a rental costs', () => {
     expect(quote.available).toBe(true);
   });
 
-  it('charges whole weeks at the weekly price, and never charges for delivery', async () => {
+  it('charges whole weeks at the weekly price, and the delivery fee the business set when asked for', async () => {
     const res = await post('/bookings/quote', {
       vehicleId,
       startDate: dateIn(40),
@@ -134,16 +134,28 @@ describe('what a rental costs', () => {
       collection: 'delivery',
     });
     const quote = res.json();
-    // 9 days = one week at $390 plus 2 days at $65, then the fee. Delivery was
-    // asked for and adds nothing: there is no delivery line at all.
+    // 9 days = one week at $390 plus 2 days at $65, then the business's $25
+    // delivery fee, then the service fee on all of it.
     expect(quote.lines.map((l: { label: string }) => l.label)).toEqual([
       'Rental (1 week x $390)',
       'Rental (2 days x $65)',
+      'Delivery',
       'Service fee',
     ]);
-    // $520 rental + $26 fee (5% of the rental). Nothing for delivery.
-    expect(quote.lines.find((l: { label: string }) => l.label === 'Service fee').amount).toBe(26);
-    expect(quote.totalDueToday).toBe(546);
+    // $520 rental + $25 delivery = $545; fee 5% of that = $27.25.
+    expect(quote.lines.find((l: { label: string }) => l.label === 'Delivery').amount).toBe(25);
+    expect(quote.lines.find((l: { label: string }) => l.label === 'Service fee').amount).toBe(27.25);
+    expect(quote.totalDueToday).toBe(572.25);
+
+    // Collected instead of delivered: no delivery line at all.
+    const collected = await post('/bookings/quote', {
+      vehicleId,
+      startDate: dateIn(40),
+      endDate: dateIn(49),
+      collection: 'pickup',
+    });
+    expect(collected.json().lines.some((l: { label: string }) => l.label === 'Delivery')).toBe(false);
+    expect(collected.json().totalDueToday).toBe(546);
   });
 });
 
