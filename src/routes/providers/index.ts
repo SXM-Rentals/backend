@@ -26,6 +26,7 @@
 //   GET    /providers/me/messages/:id    one conversation
 //   POST   /providers/me/messages/:id/messages   reply to it
 //   POST   /providers/me/messages/:id/read       mark it read
+//   PATCH  /providers/me/messages/:id    mark unread, pin, mute — your copy only
 //   GET    /providers/me/payouts         what SXM Rentals has paid them
 //   POST   /providers/me/payout-account  set up where the money goes
 //   GET    /providers/me/payout-account  how that setup is going
@@ -45,6 +46,8 @@ import { isUuid } from '../../lib/ownership.js';
 import type { PhotoStorage } from '../../lib/storage.js';
 import type { PushService } from '../../services/push/index.js';
 import type { DateChangeService } from '../../services/date-changes/index.js';
+import { requireFeature } from '../../services/capabilities/index.js';
+import { threadOptionsBody } from '../messages/index.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
@@ -81,6 +84,7 @@ import {
   markReadAsProvider,
   messageAboutBooking,
   replyAsProvider,
+  setOptionsAsProvider,
 } from '../../services/messaging/index.js';
 import { toProvider } from '../../services/serializers/vehicles.js';
 
@@ -361,22 +365,32 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
 
   // ---- CONVERSATIONS WITH RENTERS ----
   // A display name and whether they are verified, never contact details.
+  // Each member of the business has their own pins, mutes and unread marks,
+  // so the person looking is passed along with the business.
   app.get('/me/messages', async (request) => {
     const { providerId } = await businessFor(request);
-    return listThreadsForProvider(db, providerId);
+    return listThreadsForProvider(db, providerId, requireCustomer(request).customerId);
   });
 
   app.get('/me/messages/:id', async (request) => {
     const { providerId } = await businessFor(request);
     const { id } = parseInput(idParam, request.params);
-    return getThreadForProvider(db, providerId, id);
+    return getThreadForProvider(db, providerId, id, requireCustomer(request).customerId);
+  });
+
+  app.patch('/me/messages/:id', async (request) => {
+    requireFeature(config, 'messageOptions');
+    const { providerId } = await businessFor(request);
+    const { id } = parseInput(idParam, request.params);
+    const change = parseInput(threadOptionsBody, request.body);
+    return setOptionsAsProvider(db, providerId, id, requireCustomer(request).customerId, change);
   });
 
   app.post('/me/messages/:id/messages', async (request, reply) => {
     const { providerId } = await businessFor(request);
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(providerMessageBody, request.body);
-    const thread = await replyAsProvider(db, providerId, id, body);
+    const thread = await replyAsProvider(db, providerId, id, body, requireCustomer(request).customerId);
     // The renter is told a message arrived — who from, never what it says.
     await options.push.messageFromBusiness(thread.id);
     return reply.status(201).send(thread);
@@ -408,7 +422,7 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { providerId } = await businessFor(request);
     const { id } = parseInput(idParam, request.params);
     const body = parseInput(providerMessageBody, request.body);
-    const thread = await messageAboutBooking(db, providerId, id, body);
+    const thread = await messageAboutBooking(db, providerId, id, body, requireCustomer(request).customerId);
     await options.push.messageFromBusiness(thread.id);
     return reply.status(201).send(thread);
   });
@@ -416,7 +430,7 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
   app.post('/me/messages/:id/read', async (request, reply) => {
     const { providerId } = await businessFor(request);
     const { id } = parseInput(idParam, request.params);
-    await markReadAsProvider(db, providerId, id);
+    await markReadAsProvider(db, providerId, id, requireCustomer(request).customerId);
     return reply.status(204).send();
   });
 

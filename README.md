@@ -215,6 +215,7 @@ Everything lives under `/api/v1`.
 | GET | `/messages/threads` · `/threads/:id` | Your conversations with rental businesses |
 | POST | `/messages/threads` | Start one, or continue an existing one |
 | POST | `/messages/threads/:id/messages` · `/read` | Say something else · mark as read |
+| PATCH | `/messages/threads/:id` | Mark as unread, pin, mute — your own copy only |
 | POST | `/providers/apply` | Register a rental business |
 | GET · PATCH | `/providers/me` | The business's own record |
 | GET | `/providers/me/summary` | The dashboard headline figures |
@@ -229,6 +230,7 @@ Everything lives under `/api/v1`.
 | POST | `/providers/me/bookings/:id/date-changes/:requestId/accept` · `/decline` | Answer a renter's request for new dates |
 | GET | `/providers/me/messages` · `/messages/:id` | Conversations with renters |
 | POST | `/providers/me/messages/:id/messages` · `/read` | Reply · mark as read |
+| PATCH | `/providers/me/messages/:id` | Mark as unread, pin, mute — for this member of the business only |
 | POST | `/providers/me/bookings/:id/messages` | Write first about one of its bookings |
 | POST | `/providers/me/close` | Close the business: every car comes off the site (owner only) |
 | GET | `/providers/me/payouts` | What SXM Rentals has paid them |

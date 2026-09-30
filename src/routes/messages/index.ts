@@ -8,6 +8,7 @@
 //   POST /messages/threads              start one (or continue an existing one)
 //   POST /messages/threads/:id/messages say something else
 //   POST /messages/threads/:id/read     mark the business's messages as read
+//   PATCH /messages/threads/:id         mark unread, pin, mute — your copy only
 //
 // Talking to a business happens here, inside SXM Rentals, rather than by phone
 // or email — which is what lets a business answer without ever being given a
@@ -18,7 +19,9 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { Config } from '../../config.js';
 import type { Database } from '../../db/client.js';
+import { requireFeature } from '../../services/capabilities/index.js';
 import type { PushService } from '../../services/push/index.js';
 import { parseInput } from '../../lib/validate.js';
 import { requireCustomer } from '../../middleware/auth.js';
@@ -27,10 +30,17 @@ import {
   listThreadsForCustomer,
   markReadAsCustomer,
   replyAsCustomer,
+  setOptionsAsCustomer,
   startThread,
 } from '../../services/messaging/index.js';
 
-export type MessageRouteOptions = { db: Database; push: PushService };
+export type MessageRouteOptions = { db: Database; push: PushService; config: Config };
+
+// Mark as unread, pin, mute. "unread" can only be switched on: reading the
+// conversation is what switches it off.
+export const threadOptionsBody = z
+  .object({ unread: z.literal(true).optional(), pinned: z.boolean().optional(), muted: z.boolean().optional() })
+  .refine((body) => Object.keys(body).length > 0, 'Say what to change: unread, pinned or muted.');
 
 const idParam = z.object({ id: z.string().max(64) });
 // A message is words, a car, or both. The service refuses one that is neither.
@@ -69,6 +79,13 @@ export default async function messageRoutes(app: FastifyInstance, options: Messa
     const thread = await replyAsCustomer(db, actor, id, body);
     await options.push.messageFromCustomer(thread.id);
     return reply.status(201).send(thread);
+  });
+
+  app.patch('/threads/:id', async (request) => {
+    requireFeature(options.config, 'messageOptions');
+    const actor = requireCustomer(request);
+    const { id } = parseInput(idParam, request.params);
+    return setOptionsAsCustomer(db, actor, id, parseInput(threadOptionsBody, request.body));
   });
 
   app.post('/threads/:id/read', async (request, reply) => {

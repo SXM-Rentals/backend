@@ -21,10 +21,86 @@
 import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { carSummariesFor, carSummaryFor, providerNameFor, providerNamesFor } from '../summaries/index.js';
 import type { Database } from '../../db/client.js';
-import { bookings, chatMessages, chatThreads, customers, vehicles } from '../../db/schema/index.js';
+import { bookings, chatMessages, chatThreadSettings, chatThreads, customers, vehicles } from '../../db/schema/index.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
-import { toBusinessChatThread, toChatThread } from '../serializers/messaging.js';
+import { NO_OPTIONS, toBusinessChatThread, toChatThread, type ThreadOptions } from '../serializers/messaging.js';
+
+type Side = 'customer' | 'provider';
+
+// ---- ONE PERSON'S OPTIONS ----
+// Pinned, muted and marked unread, for a page of conversations, in one query.
+async function optionsFor(db: Database, side: Side, personId: string, threadIds: string[]) {
+  const found = new Map<string, ThreadOptions>();
+  if (threadIds.length === 0) return found;
+  const rows = await db
+    .select()
+    .from(chatThreadSettings)
+    .where(
+      and(
+        eq(chatThreadSettings.side, side),
+        eq(chatThreadSettings.customerId, personId),
+        inArray(chatThreadSettings.threadId, threadIds),
+      ),
+    );
+  for (const row of rows) {
+    found.set(row.threadId, { pinned: row.pinned, muted: row.muted, markedUnread: row.markedUnread });
+  }
+  return found;
+}
+
+// Pinned first; otherwise the order the list already had (most recent first).
+function pinnedFirst<T extends { pinned: boolean }>(threads: T[]): T[] {
+  return [...threads].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+}
+
+export type ThreadOptionsChange = {
+  unread?: true | undefined;
+  pinned?: boolean | undefined;
+  muted?: boolean | undefined;
+};
+
+// Saves what changed and leaves the rest as it was.
+async function saveOptions(db: Database, threadId: string, personId: string, side: Side, change: ThreadOptionsChange) {
+  const set = {
+    ...(change.unread ? { markedUnread: true } : {}),
+    ...(change.pinned !== undefined ? { pinned: change.pinned } : {}),
+    ...(change.muted !== undefined ? { muted: change.muted } : {}),
+  };
+  if (Object.keys(set).length === 0) return;
+  await db
+    .insert(chatThreadSettings)
+    .values({ threadId, customerId: personId, side, ...set })
+    .onConflictDoUpdate({
+      target: [chatThreadSettings.threadId, chatThreadSettings.customerId, chatThreadSettings.side],
+      set: { ...set, updatedAt: new Date() },
+    });
+}
+
+// Reading clears the person's own "marked unread".
+async function clearUnreadMark(db: Database, threadId: string, personId: string, side: Side) {
+  await db
+    .update(chatThreadSettings)
+    .set({ markedUnread: false, updatedAt: new Date() })
+    .where(
+      and(
+        eq(chatThreadSettings.threadId, threadId),
+        eq(chatThreadSettings.customerId, personId),
+        eq(chatThreadSettings.side, side),
+      ),
+    );
+}
+
+// Who has muted a conversation, from one side — so a push skips them.
+export async function mutedBy(db: Database, threadId: string, side: Side): Promise<Set<string>> {
+  const rows = await db
+    .select({ customerId: chatThreadSettings.customerId })
+    .from(chatThreadSettings)
+    .where(
+      and(eq(chatThreadSettings.threadId, threadId), eq(chatThreadSettings.side, side), eq(chatThreadSettings.muted, true)),
+    );
+  return new Set(rows.map((row) => row.customerId));
+}
 
 export type NewMessage = {
   body?: string | undefined;
@@ -78,23 +154,27 @@ export async function listThreadsForCustomer(db: Database, actor: Actor) {
     .orderBy(desc(chatThreads.updatedAt));
   if (threads.length === 0) return [];
 
-  const [messages, refs, cars, names] = await Promise.all([
+  const [messages, refs, cars, names, options] = await Promise.all([
     messagesFor(db, threads.map((thread) => thread.id)),
     bookingRefsFor(db, threads),
     // Once for the whole list, not once per conversation.
     carSummariesFor(db, threads.map((thread) => thread.vehicleId ?? '')),
     providerNamesFor(db, threads.map((thread) => thread.providerId)),
+    optionsFor(db, 'customer', actor.customerId, threads.map((thread) => thread.id)),
   ]);
 
-  return threads.map((thread) =>
-    toChatThread(
-      thread,
-      messages.filter((message) => message.threadId === thread.id),
-      {
-        vehicle: thread.vehicleId ? cars.get(thread.vehicleId) ?? null : null,
-        providerName: names.get(thread.providerId) ?? '',
-      },
-      thread.bookingId ? refs.get(thread.bookingId) : undefined,
+  return pinnedFirst(
+    threads.map((thread) =>
+      toChatThread(
+        thread,
+        messages.filter((message) => message.threadId === thread.id),
+        {
+          vehicle: thread.vehicleId ? cars.get(thread.vehicleId) ?? null : null,
+          providerName: names.get(thread.providerId) ?? '',
+        },
+        thread.bookingId ? refs.get(thread.bookingId) : undefined,
+        options.get(thread.id),
+      ),
     ),
   );
 }
@@ -112,13 +192,27 @@ async function loadCustomerThread(db: Database, actor: Actor, threadId: string) 
 
 export async function getThreadForCustomer(db: Database, actor: Actor, threadId: string) {
   const thread = await loadCustomerThread(db, actor, threadId);
-  const [messages, refs, vehicle, providerName] = await Promise.all([
+  const [messages, refs, vehicle, providerName, options] = await Promise.all([
     messagesFor(db, [thread.id]),
     bookingRefsFor(db, [thread]),
     thread.vehicleId ? carSummaryFor(db, thread.vehicleId) : Promise.resolve(null),
     providerNameFor(db, thread.providerId),
+    optionsFor(db, 'customer', actor.customerId, [thread.id]),
   ]);
-  return toChatThread(thread, messages, { vehicle, providerName }, thread.bookingId ? refs.get(thread.bookingId) : undefined);
+  return toChatThread(
+    thread,
+    messages,
+    { vehicle, providerName },
+    thread.bookingId ? refs.get(thread.bookingId) : undefined,
+    options.get(thread.id) ?? NO_OPTIONS,
+  );
+}
+
+// Mark as unread, pin, mute — the customer's own copy only.
+export async function setOptionsAsCustomer(db: Database, actor: Actor, threadId: string, change: ThreadOptionsChange) {
+  const thread = await loadCustomerThread(db, actor, threadId);
+  await saveOptions(db, thread.id, actor.customerId, 'customer', change);
+  return getThreadForCustomer(db, actor, thread.id);
 }
 
 // Starting a conversation. Asking the same business again continues the
@@ -204,13 +298,15 @@ export async function markReadAsCustomer(db: Database, actor: Actor, threadId: s
     .update(chatMessages)
     .set({ readAt: new Date() })
     .where(and(eq(chatMessages.threadId, thread.id), ne(chatMessages.sender, 'customer'), isNull(chatMessages.readAt)));
+  await clearUnreadMark(db, thread.id, actor.customerId, 'customer');
 }
 
 // ================= THE RENTAL BUSINESS'S SIDE =================
 // Every one of these is scoped to the business the signed-in person acts for,
 // so one business can never read another's conversations.
 
-export async function listThreadsForProvider(db: Database, providerId: string) {
+// personId: the member of the business who is looking, for their own options.
+export async function listThreadsForProvider(db: Database, providerId: string, personId: string) {
   const rows = await db
     .select({ thread: chatThreads, renter: customers })
     .from(chatThreads)
@@ -220,24 +316,28 @@ export async function listThreadsForProvider(db: Database, providerId: string) {
   if (rows.length === 0) return [];
 
   const threads = rows.map((row) => row.thread);
-  const [messages, refs] = await Promise.all([
+  const [messages, refs, options] = await Promise.all([
     messagesFor(db, threads.map((thread) => thread.id)),
     bookingRefsFor(db, threads),
+    optionsFor(db, 'provider', personId, threads.map((thread) => thread.id)),
   ]);
 
   const cars = await carSummariesFor(db, rows.map((row) => row.thread.vehicleId ?? ''));
 
-  return rows.map((row) =>
-    toBusinessChatThread(
-      row.thread,
-      messages.filter((message) => message.threadId === row.thread.id),
-      {
-        firstName: row.renter.firstName,
-        lastName: row.renter.lastName,
-        verificationStatus: row.renter.verificationStatus,
-      },
-      row.thread.vehicleId ? cars.get(row.thread.vehicleId) ?? null : null,
-      row.thread.bookingId ? refs.get(row.thread.bookingId) : undefined,
+  return pinnedFirst(
+    rows.map((row) =>
+      toBusinessChatThread(
+        row.thread,
+        messages.filter((message) => message.threadId === row.thread.id),
+        {
+          firstName: row.renter.firstName,
+          lastName: row.renter.lastName,
+          verificationStatus: row.renter.verificationStatus,
+        },
+        row.thread.vehicleId ? cars.get(row.thread.vehicleId) ?? null : null,
+        row.thread.bookingId ? refs.get(row.thread.bookingId) : undefined,
+        options.get(row.thread.id),
+      ),
     ),
   );
 }
@@ -254,9 +354,13 @@ async function loadProviderThread(db: Database, providerId: string, threadId: st
   return row;
 }
 
-export async function getThreadForProvider(db: Database, providerId: string, threadId: string) {
+export async function getThreadForProvider(db: Database, providerId: string, threadId: string, personId: string) {
   const row = await loadProviderThread(db, providerId, threadId);
-  const [messages, refs] = await Promise.all([messagesFor(db, [row.thread.id]), bookingRefsFor(db, [row.thread])]);
+  const [messages, refs, options] = await Promise.all([
+    messagesFor(db, [row.thread.id]),
+    bookingRefsFor(db, [row.thread]),
+    optionsFor(db, 'provider', personId, [row.thread.id]),
+  ]);
   return toBusinessChatThread(
     row.thread,
     messages,
@@ -267,10 +371,30 @@ export async function getThreadForProvider(db: Database, providerId: string, thr
     },
     row.thread.vehicleId ? await carSummaryFor(db, row.thread.vehicleId) : null,
     row.thread.bookingId ? refs.get(row.thread.bookingId) : undefined,
+    options.get(row.thread.id) ?? NO_OPTIONS,
   );
 }
 
-export async function replyAsProvider(db: Database, providerId: string, threadId: string, input: NewMessage) {
+// Mark as unread, pin, mute — this member of the business only.
+export async function setOptionsAsProvider(
+  db: Database,
+  providerId: string,
+  threadId: string,
+  personId: string,
+  change: ThreadOptionsChange,
+) {
+  const row = await loadProviderThread(db, providerId, threadId);
+  await saveOptions(db, row.thread.id, personId, 'provider', change);
+  return getThreadForProvider(db, providerId, row.thread.id, personId);
+}
+
+export async function replyAsProvider(
+  db: Database,
+  providerId: string,
+  threadId: string,
+  input: NewMessage,
+  personId: string,
+) {
   const row = await loadProviderThread(db, providerId, threadId);
   const body = assertNotEmpty(input);
   await assertVehicleBelongs(db, providerId, input.vehicleId);
@@ -283,7 +407,7 @@ export async function replyAsProvider(db: Database, providerId: string, threadId
   });
   await db.update(chatThreads).set({ updatedAt: new Date() }).where(eq(chatThreads.id, row.thread.id));
 
-  return getThreadForProvider(db, providerId, row.thread.id);
+  return getThreadForProvider(db, providerId, row.thread.id, personId);
 }
 
 // ---- A BUSINESS WRITING FIRST, ABOUT ONE OF ITS BOOKINGS ----
@@ -300,6 +424,7 @@ export async function messageAboutBooking(
   providerId: string,
   bookingId: string,
   input: NewMessage,
+  personId: string,
 ) {
   const body = assertNotEmpty(input);
   if (!isUuid(bookingId)) throw notFound('We could not find that booking.');
@@ -342,7 +467,7 @@ export async function messageAboutBooking(
   });
   await db.update(chatThreads).set({ updatedAt: new Date() }).where(eq(chatThreads.id, thread.id));
 
-  return getThreadForProvider(db, providerId, thread.id);
+  return getThreadForProvider(db, providerId, thread.id, personId);
 }
 
 // The conversation about a booking, if there is one, so a business's booking can
@@ -362,7 +487,7 @@ export async function threadIdsForBookings(db: Database, bookingIds: string[]): 
   return found;
 }
 
-export async function markReadAsProvider(db: Database, providerId: string, threadId: string) {
+export async function markReadAsProvider(db: Database, providerId: string, threadId: string, personId: string) {
   const row = await loadProviderThread(db, providerId, threadId);
   await db
     .update(chatMessages)
@@ -370,4 +495,5 @@ export async function markReadAsProvider(db: Database, providerId: string, threa
     .where(
       and(eq(chatMessages.threadId, row.thread.id), eq(chatMessages.sender, 'customer'), isNull(chatMessages.readAt)),
     );
+  await clearUnreadMark(db, row.thread.id, personId, 'provider');
 }

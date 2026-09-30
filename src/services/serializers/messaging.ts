@@ -32,6 +32,14 @@ export type RenterSummary = {
 // business; the business's view does not need its own name.
 export type ThreadContext = { vehicle: CarSummary | null; providerName: string };
 
+// The person's own options for the conversation. Nobody has chosen any until
+// they do, so every one starts false.
+export type ThreadOptions = { pinned: boolean; muted: boolean; markedUnread: boolean };
+export const NO_OPTIONS: ThreadOptions = { pinned: false, muted: false, markedUnread: false };
+
+// Marked unread counts as at least one, whatever the messages say.
+const unreadWith = (count: number, options: ThreadOptions) => (options.markedUnread ? Math.max(count, 1) : count);
+
 export function toChatMessage(message: MessageRow) {
   return {
     id: message.id,
@@ -53,6 +61,7 @@ export function toChatThread(
   messages: MessageRow[],
   context: ThreadContext,
   bookingRef?: string,
+  options: ThreadOptions = NO_OPTIONS,
 ) {
   return {
     id: thread.id,
@@ -63,7 +72,12 @@ export function toChatThread(
     vehicle: context.vehicle,
     ...(bookingRef ? { bookingRef } : {}),
     messages: [...messages].sort(byTime).map(toChatMessage),
-    unreadCount: messages.filter((message) => message.sender === 'provider' && message.readAt === null).length,
+    unreadCount: unreadWith(
+      messages.filter((message) => message.sender === 'provider' && message.readAt === null).length,
+      options,
+    ),
+    pinned: options.pinned,
+    muted: options.muted,
   };
 }
 
@@ -75,6 +89,7 @@ export function toBusinessChatThread(
   renter: RenterSummary,
   vehicle: CarSummary | null,
   bookingRef?: string,
+  options: ThreadOptions = NO_OPTIONS,
 ) {
   return {
     id: thread.id,
@@ -84,6 +99,11 @@ export function toBusinessChatThread(
     ...(bookingRef ? { bookingRef } : {}),
     ...(thread.vehicleId ? { vehicleId: thread.vehicleId } : {}),
     messages: [...messages].sort(byTime).map(toChatMessage),
-    unreadCount: messages.filter((message) => message.sender === 'customer' && message.readAt === null).length,
+    unreadCount: unreadWith(
+      messages.filter((message) => message.sender === 'customer' && message.readAt === null).length,
+      options,
+    ),
+    pinned: options.pinned,
+    muted: options.muted,
   };
 }

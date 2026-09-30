@@ -217,7 +217,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       await api.register(bookingRoutes, { prefix: '/bookings', db, notifications, verification, dateChanges });
       await api.register(verificationRoutes, { prefix: '/verification', config, verification });
       await api.register(notificationRoutes, { prefix: '/notifications', notifications, config });
-      await api.register(messageRoutes, { prefix: '/messages', db, push });
+      await api.register(messageRoutes, { prefix: '/messages', db, push, config });
       await api.register(paymentRoutes, { prefix: '/payments', payments, config, dateChanges });
       await api.register(depositRoutes, { prefix: '/deposits', payments });
       await api.register(webhookRoutes, { prefix: '/webhooks', payments, gateway, verification });

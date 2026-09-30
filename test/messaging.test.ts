@@ -140,8 +140,9 @@ describe('the business answering', () => {
     expect(threads.body).not.toContain('Jonesworth');
     expect(Object.keys(thread).sort()).toEqual(
       // 'vehicle' is the car the conversation is about, so a header can name it.
+      // 'pinned' and 'muted' are this member's own options for it.
       // Still no contact detail, which is what this test guards.
-      ['id', 'renterDisplayName', 'renterVerified', 'vehicle', 'messages', 'unreadCount'].sort(),
+      ['id', 'renterDisplayName', 'renterVerified', 'vehicle', 'messages', 'unreadCount', 'pinned', 'muted'].sort(),
     );
   });
 

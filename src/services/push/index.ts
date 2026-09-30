@@ -34,6 +34,7 @@ import {
 } from '../../db/schema/index.js';
 import type { Actor } from '../../lib/ownership.js';
 import type { PushMessage, PushSender } from '../../lib/push.js';
+import { mutedBy } from '../messaging/index.js';
 
 export const MAX_DEVICES_PER_PERSON = 10;
 
@@ -217,6 +218,8 @@ export function createPushService(deps: PushServiceDeps) {
         .where(eq(chatThreads.id, threadId))
         .limit(1);
       if (!thread) return;
+      // Muted by the renter: the message arrives, and no push goes out.
+      if ((await mutedBy(db, threadId, 'customer')).has(thread.customerId)) return;
       await sendToCustomer(thread.customerId, {
         category: 'messages',
         title: `New message from ${thread.businessName}`,
@@ -234,8 +237,9 @@ export function createPushService(deps: PushServiceDeps) {
         .where(eq(chatThreads.id, threadId))
         .limit(1);
       if (!thread) return;
+      const muted = await mutedBy(db, threadId, 'provider');
       for (const owner of await ownersOf(thread.providerId)) {
-        if (owner === thread.customerId) continue;
+        if (owner === thread.customerId || muted.has(owner)) continue;
         await sendToCustomer(owner, {
           category: 'messages',
           title: 'New message from a renter',

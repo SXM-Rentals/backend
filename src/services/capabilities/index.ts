@@ -90,7 +90,7 @@ const FEATURES: Record<FeatureName, Feature> = {
   blockedDays: { built: false },
   deleteNotifications: { built: true },
   dataExport: { built: true },
-  messageOptions: { built: false },
+  messageOptions: { built: true },
   phoneSignIn: { built: false },
   calls: { built: false },
 };

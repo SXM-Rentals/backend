@@ -6,7 +6,7 @@
 // with who approved each one.
 
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, index, integer, pgTable, primaryKey, text, uuid } from 'drizzle-orm/pg-core';
 import { adminStaff } from './admin.js';
 import { bookings } from './bookings.js';
 import { createdAt, moment, updatedAt } from './columns.js';
@@ -54,6 +54,34 @@ export const chatMessages = pgTable(
     index('chat_messages_thread_idx').on(t.threadId, t.sentAt),
     check('chat_messages_not_empty', sql`length(${t.body}) > 0 or ${t.vehicleId} is not null`),
   ],
+);
+
+// ---- ONE PERSON'S OPTIONS FOR ONE CONVERSATION ----
+// Pinned, muted, and marked unread belong to the PERSON, not the conversation:
+// when a business pins a conversation the renter's copy does not change, and one
+// member of a business muting it does not mute it for the others. "side" says
+// which end of the conversation the person is on, so the key is exact even in
+// the odd case of somebody renting from their own business.
+export const chatThreadSettings = pgTable(
+  'chat_thread_settings',
+  {
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => chatThreads.id, { onDelete: 'cascade' }),
+    customerId: uuid('customer_id')
+      .notNull()
+      .references(() => customers.id, { onDelete: 'cascade' }),
+    side: chatSender('side').notNull(),
+    pinned: boolean('pinned').notNull().default(false),
+    // No push for new messages. They still arrive and still count as unread.
+    muted: boolean('muted').notNull().default(false),
+    // "Mark as unread": counts as at least one unread until it is read again.
+    // A mark of the person's own rather than un-reading the message itself, so
+    // the other side's "read" tick never disappears because of it.
+    markedUnread: boolean('marked_unread').notNull().default(false),
+    updatedAt: updatedAt(),
+  },
+  (t) => [primaryKey({ columns: [t.threadId, t.customerId, t.side] })],
 );
 
 // ---- NOTIFICATIONS ----
