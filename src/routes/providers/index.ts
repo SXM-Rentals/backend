@@ -347,7 +347,7 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
   app.post('/me/vehicles', async (request, reply) => {
     const { providerId } = await businessFor(request);
     const body = parseInput(vehicleBody, request.body);
-    const vehicle = await addVehicle(db, providerId, body);
+    const vehicle = await addVehicle(db, providerId, body, config.vehicleApprovalRequired);
     return reply.status(201).send(vehicle);
   });
 
@@ -380,7 +380,7 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
     const { providerId } = await businessFor(request);
     const { importId } = parseInput(importParams, request.params);
     const { rowNumbers } = parseInput(confirmBody, request.body);
-    return reply.status(201).send(await confirmImport(db, providerId, importId, rowNumbers));
+    return reply.status(201).send(await confirmImport(db, providerId, importId, rowNumbers, config.vehicleApprovalRequired));
   });
 
   // ---- ITS OWN BOOKING SYSTEM ----

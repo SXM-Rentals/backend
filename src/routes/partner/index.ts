@@ -57,7 +57,7 @@ export default async function partnerRoutes(app: FastifyInstance, options: Partn
 
   app.post('/vehicles', async (request, reply) => {
     const providerId = await businessFor(request);
-    const vehicle = await addVehicle(db, providerId, parseInput(vehicleBody, request.body));
+    const vehicle = await addVehicle(db, providerId, parseInput(vehicleBody, request.body), config.vehicleApprovalRequired);
     return reply.status(201).send(vehicle);
   });
 

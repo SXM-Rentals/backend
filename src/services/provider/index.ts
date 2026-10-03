@@ -447,7 +447,10 @@ async function replaceAccidentHistory(db: Database, vehicleId: string, records: 
 }
 
 // A new car waits for staff approval before customers can see it.
-export async function addVehicle(db: Database, providerId: string, input: VehicleInput) {
+// Normally a new car waits for staff approval before customers can see it.
+// approvalRequired is false only while the owner has switched approval off
+// (VEHICLE_APPROVAL=off), and then the car goes on the site straight away.
+export async function addVehicle(db: Database, providerId: string, input: VehicleInput, approvalRequired = true) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       // In its own savepoint, so a clash can be retried even when this runs
@@ -484,7 +487,7 @@ export async function addVehicle(db: Database, providerId: string, input: Vehicl
           registration: input.registration ? normaliseRegistration(input.registration) : null,
           // Declaring accidents answers the question as surely as saying "none".
           accidentHistoryDeclared: input.accidentHistoryDeclared ?? Boolean(input.accidentHistory?.length),
-          listingStatus: 'pending_review',
+          listingStatus: approvalRequired ? 'pending_review' : 'live',
         })
         .returning(),
       );

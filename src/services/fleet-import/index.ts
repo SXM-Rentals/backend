@@ -365,7 +365,14 @@ export async function readImport(db: Database, providerId: string, input: { file
 }
 
 // ---- STEP 2: ADD THE ROWS THE BUSINESS CHOSE ----
-export async function confirmImport(db: Database, providerId: string, importId: string, rowNumbers: number[]) {
+export async function confirmImport(
+  db: Database,
+  providerId: string,
+  importId: string,
+  rowNumbers: number[],
+  // False only while the owner has switched car approval off.
+  approvalRequired = true,
+) {
   if (!isUuid(importId)) throw notFound('We could not find that import.');
   return db.transaction(async (tx) => {
     // Locked, so confirming twice at the same moment still adds each car once.
@@ -400,7 +407,7 @@ export async function confirmImport(db: Database, providerId: string, importId: 
       throw badRequest('row_has_problems', `Row ${clashing.join(', ')} is already in your fleet now. Leave it out.`);
     }
 
-    for (const row of toAdd) await addVehicle(tx as unknown as Database, providerId, row!.input!);
+    for (const row of toAdd) await addVehicle(tx as unknown as Database, providerId, row!.input!, approvalRequired);
     await tx
       .update(fleetImports)
       .set({ addedRows: [...already, ...toAdd.map((row) => row!.rowNumber)] })

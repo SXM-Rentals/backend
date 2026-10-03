@@ -71,6 +71,10 @@ const envSchema = z
     // Identity's own page; costs per check) or "staff" (decided in the admin
     // panel). Staff until the owner says otherwise — it costs nothing.
     IDENTITY_METHOD: z.enum(['stripe', 'staff']).default('staff'),
+    // Whether a newly added car waits for staff approval before customers can
+    // see it. "off" puts it on the site straight away — for testing before
+    // launch. On unless set to "off".
+    VEHICLE_APPROVAL: z.enum(['on', 'off']).default('on'),
     // Twilio, for calls inside the app and sign-in codes by text. Calls need the
     // account, an API key and its secret, and the TwiML app that routes calls
     // (whose Voice address is https://<this API>/api/v1/calls/twiml); the push
@@ -144,6 +148,8 @@ export type Config = {
   featuresOn: 'all' | string[];
   featuresOff: string[];
   identityMethod: 'stripe' | 'staff';
+  // False only when VEHICLE_APPROVAL=off: new cars go live without staff.
+  vehicleApprovalRequired: boolean;
   expoAccessToken: string | undefined;
   twilio: {
     accountSid: string | undefined;
@@ -214,6 +220,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     featuresOn: env.FEATURES.trim().toLowerCase() === 'all' ? 'all' : splitList(env.FEATURES),
     featuresOff: splitList(env.FEATURES_OFF),
     identityMethod: env.IDENTITY_METHOD,
+    vehicleApprovalRequired: env.VEHICLE_APPROVAL !== 'off',
     expoAccessToken: env.EXPO_ACCESS_TOKEN,
     twilio: {
       accountSid: env.TWILIO_ACCOUNT_SID,
