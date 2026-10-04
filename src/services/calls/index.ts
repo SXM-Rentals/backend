@@ -118,8 +118,16 @@ export function createCallService(deps: CallDeps) {
     const seconds =
       durationSeconds ?? (done.answeredAt ? Math.round((done.endedAt!.getTime() - done.answeredAt.getTime()) / 1000) : 0);
     const talked = outcome === 'ended' && done.answeredAt !== null;
-    const body = talked ? `Call, ${Math.max(1, Math.ceil(seconds / 60))} min` : 'Missed call';
-    await db.insert(chatMessages).values({ threadId: done.threadId, sender: done.callerSide, body });
+    const minutes = talked ? Math.max(1, Math.ceil(seconds / 60)) : null;
+    const body = talked ? `Call, ${minutes} min` : 'Missed call';
+    await db.insert(chatMessages).values({
+      threadId: done.threadId,
+      sender: done.callerSide,
+      body,
+      kind: 'call',
+      callOutcome: talked ? 'answered' : 'missed',
+      callMinutes: minutes,
+    });
     await db.update(chatThreads).set({ updatedAt: new Date() }).where(eq(chatThreads.id, done.threadId));
   }
 
@@ -147,7 +155,16 @@ export function createCallService(deps: CallDeps) {
           category: 'messages',
           title: 'Incoming call',
           body: `${from} is calling you on SXM Rentals.`,
-          data: { type: 'call', id: call!.id, callId: call!.id, from },
+          // Which conversation the call is about, and which side is being rung,
+          // so tapping it opens that conversation rather than the whole list.
+          data: {
+            type: 'call',
+            id: call!.id,
+            callId: call!.id,
+            from,
+            threadId: thread.id,
+            side: otherSide === 'customer' ? 'customer' : 'business',
+          },
         });
       }
 

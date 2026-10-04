@@ -116,7 +116,15 @@ describe('a renter calling a business', () => {
 
     const rang = pushes.filter((push) => push.to === owner.phone);
     expect(rang).toHaveLength(1);
-    expect(rang[0]!.data).toEqual({ type: 'call', id: call.callId, callId: call.callId, from: 'Benjamin J.' });
+    // Which conversation, and that the business is the side being rung.
+    expect(rang[0]!.data).toEqual({
+      type: 'call',
+      id: call.callId,
+      callId: call.callId,
+      from: 'Benjamin J.',
+      threadId,
+      side: 'business',
+    });
     expect(JSON.stringify(pushes)).not.toMatch(/555|\+1 721/);
   });
 
@@ -150,6 +158,14 @@ describe('a renter calling a business', () => {
 
     const lines = await linesIn();
     expect(lines.filter((line) => line === 'Call, 4 min')).toHaveLength(1);
+
+    // Marked as a call, so the app never mistakes somebody typing "Missed call" for one.
+    const thread = await ctx.app.inject({ method: 'GET', url: `/api/v1/messages/threads/${threadId}`, headers: auth(renter.token), remoteAddress: uniqueIp() });
+    const callLine = thread.json().messages.find((message: { body: string }) => message.body === 'Call, 4 min');
+    expect(callLine).toMatchObject({ kind: 'call', call: { outcome: 'answered', minutes: 4 } });
+    const typed = thread.json().messages.find((message: { body: string }) => message.body === 'Can I call you?');
+    expect(typed.kind).toBe('text');
+    expect(typed).not.toHaveProperty('call');
     const [row] = await ctx.db.select().from(calls).where(eq(calls.id, callId));
     expect(row!.status).toBe('ended');
   });
@@ -166,6 +182,8 @@ describe('a call nobody takes', () => {
     await fromTwilio(`/calls/${second.callId}/dial-status`, { DialCallStatus: 'no-answer', DialCallDuration: '0' });
 
     expect((await linesIn()).filter((line) => line === 'Missed call').length).toBe(before + 2);
+    const missed = (await ctx.db.select().from(chatMessages).where(eq(chatMessages.threadId, threadId))).filter((m) => m.body === 'Missed call');
+    expect(missed.every((m) => m.kind === 'call' && m.callOutcome === 'missed' && m.callMinutes === null)).toBe(true);
     const answerLate = await send(`/calls/${second.callId}/answer`, renter.token);
     expect(answerLate.json().error.code).toBe('call_over');
   });

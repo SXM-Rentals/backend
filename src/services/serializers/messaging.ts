@@ -47,6 +47,12 @@ export function toChatMessage(message: MessageRow) {
     body: message.body,
     sentAt: message.sentAt.toISOString(),
     read: message.readAt !== null,
+    // "text" for something somebody wrote, "call" for a call's line — with how
+    // it went, so the app can say it in the reader's language.
+    kind: message.kind,
+    ...(message.kind === 'call'
+      ? { call: { outcome: message.callOutcome ?? 'missed', minutes: message.callMinutes ?? null } }
+      : {}),
     // A car attached to the message, shown as a small card in the bubble.
     ...(message.vehicleId ? { vehicleId: message.vehicleId } : {}),
   };

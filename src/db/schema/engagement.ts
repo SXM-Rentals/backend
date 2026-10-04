@@ -10,7 +10,7 @@ import { boolean, check, index, integer, pgTable, primaryKey, text, uuid } from 
 import { adminStaff } from './admin.js';
 import { bookings } from './bookings.js';
 import { createdAt, moment, updatedAt } from './columns.js';
-import { callStatus, chatSender, notificationKind, supportInteractionStatus } from './enums.js';
+import { callOutcome, callStatus, chatSender, messageKind, notificationKind, supportInteractionStatus } from './enums.js';
 import { customers } from './identity.js';
 import { providers } from './providers.js';
 import { vehicles } from './vehicles.js';
@@ -49,6 +49,12 @@ export const chatMessages = pgTable(
     vehicleId: uuid('vehicle_id').references(() => vehicles.id, { onDelete: 'set null' }),
     sentAt: moment('sent_at').notNull().defaultNow(),
     readAt: moment('read_at'),
+    // A call leaves a line too. Marked as one, so the app can draw it as a call
+    // (in the reader's own language) and never mistake somebody typing "Missed
+    // call" for a real one. The body keeps the words for older apps.
+    kind: messageKind('kind').notNull().default('text'),
+    callOutcome: callOutcome('call_outcome'),
+    callMinutes: integer('call_minutes'),
   },
   (t) => [
     index('chat_messages_thread_idx').on(t.threadId, t.sentAt),
