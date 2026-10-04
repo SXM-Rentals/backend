@@ -78,28 +78,28 @@ describe('the cancellation policy', () => {
 
   it('gives everything back outside 48 hours, half inside, nothing once it has started', () => {
     // Three days before: a full refund.
-    expect(refundDue(pickup, new Date('2026-10-07T10:00:00Z')).amountCents).toBe(20_000);
+    expect(refundDue(pickup, new Date('2026-10-07T10:00:00-04:00')).amountCents).toBe(20_000);
     // Exactly 48 hours before still counts as free — the boundary belongs to
     // the customer, not to us.
-    expect(refundDue(pickup, new Date('2026-10-08T10:00:00Z'))).toMatchObject({ amountCents: 20_000, rule: 'free' });
+    expect(refundDue(pickup, new Date('2026-10-08T10:00:00-04:00'))).toMatchObject({ amountCents: 20_000, rule: 'free' });
     // An hour inside it: half.
-    expect(refundDue(pickup, new Date('2026-10-08T11:00:00Z'))).toMatchObject({ amountCents: 10_000, rule: 'late' });
+    expect(refundDue(pickup, new Date('2026-10-08T11:00:00-04:00'))).toMatchObject({ amountCents: 10_000, rule: 'late' });
     // Pickup time itself, and after: nothing.
-    expect(refundDue(pickup, new Date('2026-10-10T10:00:00Z'))).toMatchObject({ amountCents: 0, rule: 'started' });
-    expect(refundDue(pickup, new Date('2026-10-11T09:00:00Z')).amountCents).toBe(0);
+    expect(refundDue(pickup, new Date('2026-10-10T10:00:00-04:00'))).toMatchObject({ amountCents: 0, rule: 'started' });
+    expect(refundDue(pickup, new Date('2026-10-11T09:00:00-04:00')).amountCents).toBe(0);
   });
 
   it('never refunds more than was paid, and rounds to the cent', () => {
     const odd = { startDate: '2026-10-10', pickupTime: '10:00', paidCents: 19_501 };
-    const due = refundDue(odd, new Date('2026-10-09T10:00:00Z'));
+    const due = refundDue(odd, new Date('2026-10-09T10:00:00-04:00'));
     expect(due.amountCents).toBe(9751);
     expect(due.amountCents).toBeLessThanOrEqual(odd.paidCents);
   });
 
   it('says which rule applied, in words a customer and a staff member can read', () => {
-    expect(refundExplanation(refundDue(pickup, new Date('2026-10-05T10:00:00Z')))).toContain('full refund');
-    expect(refundExplanation(refundDue(pickup, new Date('2026-10-09T10:00:00Z')))).toContain('half back');
-    expect(refundExplanation(refundDue(pickup, new Date('2026-10-20T10:00:00Z')))).toContain('nothing is refundable');
+    expect(refundExplanation(refundDue(pickup, new Date('2026-10-05T10:00:00-04:00')))).toContain('full refund');
+    expect(refundExplanation(refundDue(pickup, new Date('2026-10-09T10:00:00-04:00')))).toContain('half back');
+    expect(refundExplanation(refundDue(pickup, new Date('2026-10-20T10:00:00-04:00')))).toContain('nothing is refundable');
     expect(FREE_CANCELLATION_HOURS).toBe(48);
   });
 });

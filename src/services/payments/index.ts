@@ -62,6 +62,7 @@ import {
   providerPayoutAccounts,
 } from '../../db/schema/index.js';
 import { holdExpiresAt, holdWindowOpensAt } from './holds.js';
+import { islandDate, islandWords } from '../../lib/island-time.js';
 import type { OffSessionHold, PaymentGateway, PaymentRecord, WebhookEvent } from '../../lib/stripe.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
@@ -250,7 +251,7 @@ export function createPaymentService(deps: PaymentServiceDeps) {
       if (Date.now() < opensAt.getTime()) {
         throw conflict(
           'too_early',
-          `The deposit can be held from ${opensAt.toISOString().slice(0, 16).replace('T', ' at ')} (UTC), two days before pickup. A hold on a card only lasts about a week, so placing it sooner would mean it had gone before you collected the car.`,
+          `The deposit can be held from ${islandWords(opensAt)} (island time), two days before pickup. A hold on a card only lasts about a week, so placing it sooner would mean it had gone before you collected the car.`,
         );
       }
 
@@ -336,7 +337,7 @@ export function createPaymentService(deps: PaymentServiceDeps) {
         status: deposit.status,
         heldSince: deposit.authorizedAt?.toISOString() ?? null,
         holdExpiresAt: expires?.toISOString() ?? null,
-        expiresBeforeReturn: expires ? expires.toISOString().slice(0, 10) <= booking.endDate : false,
+        expiresBeforeReturn: expires ? islandDate(expires) <= booking.endDate : false,
         // When the customer may place the hold, so the app can say so rather
         // than offer a button that will be refused.
         holdOpensAt: holdWindowOpensAt(booking.startDate, booking.pickupTime).toISOString(),

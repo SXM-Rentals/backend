@@ -20,6 +20,7 @@ import type { PushSender } from '../src/lib/push.js';
 import type { TwilioClient } from '../src/lib/twilio.js';
 import { createMemoryEmailSender, type MemoryEmailSender } from '../src/lib/email.js';
 import { AppError } from '../src/lib/errors.js';
+import { islandDate } from '../src/lib/island-time.js';
 import type { PaymentGateway, SavedCard, WebhookEvent } from '../src/lib/stripe.js';
 
 export const WEB_ORIGIN = 'http://localhost:3000';
@@ -578,9 +579,10 @@ export async function seedVehicle(
   return vehicle!;
 }
 
-// A date a given number of days from today, as YYYY-MM-DD.
+// A date a given number of days from today ON THE ISLAND, as YYYY-MM-DD — the
+// same "today" the backend uses, so tests behave the same at any hour.
 export function dateIn(days: number): string {
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return islandDate(Date.now() + days * 24 * 60 * 60 * 1000);
 }
 
 export async function seedBooking(db: Database) {

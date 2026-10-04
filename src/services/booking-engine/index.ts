@@ -42,6 +42,7 @@ import { carSummariesFor, carSummaryFor, providerNameFor, providerNamesFor } fro
 import { countRentalDays, isVehicleFree, today } from '../availability-engine/index.js';
 import { checkPromoCode, normaliseCode } from '../promotions/index.js';
 import { checkSignature } from './signature.js';
+import { islandMoment } from '../../lib/island-time.js';
 
 type VehicleRow = typeof vehicles.$inferSelect;
 
@@ -400,9 +401,8 @@ export type RefundDue = {
 // `paidCents` is what the customer actually handed over, which is not the same
 // as what the booking is worth: nothing is refunded on a booking nobody paid.
 export function refundDue(input: { startDate: string; pickupTime: string; paidCents: number }, now: Date): RefundDue {
-  // The booking's own dates are island local time; the server may be anywhere,
-  // so the comparison is made in UTC from the stored date and time.
-  const pickup = new Date(`${input.startDate}T${input.pickupTime.padEnd(5, '0')}:00Z`);
+  // The booking's own date and time are island time, wherever the server is.
+  const pickup = islandMoment(input.startDate, input.pickupTime);
   const hoursBeforePickup = (pickup.getTime() - now.getTime()) / (60 * 60 * 1000);
 
   if (hoursBeforePickup <= 0) return { amountCents: 0, rule: 'started', hoursBeforePickup };

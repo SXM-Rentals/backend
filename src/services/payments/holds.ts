@@ -32,6 +32,7 @@
 import { and, eq, isNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { bookings, deposits } from '../../db/schema/index.js';
+import { islandDate, islandMoment } from '../../lib/island-time.js';
 
 // How long a card hold survives. Banks vary by a day or so either way, and card
 // networks allow longer for some kinds of business, but seven is what to plan
@@ -46,9 +47,10 @@ export const HOLD_LIFETIME_DAYS = 7;
 // what stops an older or altered app doing it anyway.
 export const DEPOSIT_HOLD_WINDOW_HOURS = 48;
 
-// The moment the window opens for a booking collected at this date and time.
+// The moment the window opens for a booking collected at this date and time —
+// island time, so 48 hours before the car is really collected.
 export function holdWindowOpensAt(startDate: string, pickupTime: string): Date {
-  const pickup = new Date(`${startDate}T${pickupTime.padEnd(5, '0')}:00Z`);
+  const pickup = islandMoment(startDate, pickupTime);
   return new Date(pickup.getTime() - DEPOSIT_HOLD_WINDOW_HOURS * 60 * 60 * 1000);
 }
 
@@ -104,7 +106,7 @@ export async function holdsExpiringBeforeReturn(db: Database, now: Date = new Da
         // Placed long enough ago to be near the end of its life.
         lte(deposits.authorizedAt, cutoff),
         // And the car is still out.
-        sql`${bookings.endDate} >= ${now.toISOString().slice(0, 10)}`,
+        sql`${bookings.endDate} >= ${islandDate(now)}`,
         isNull(bookings.payoutId),
       ),
     );

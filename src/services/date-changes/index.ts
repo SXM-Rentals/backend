@@ -52,6 +52,7 @@ import { commissionRateBps, quoteBooking, refundDue } from '../booking-engine/in
 import { isFeatureOn, requireFeature } from '../capabilities/index.js';
 import { discountOfBooking } from '../promotions/index.js';
 import { recordDateChangePaid } from '../payments/index.js';
+import { islandMoment } from '../../lib/island-time.js';
 import type { PushService } from '../push/index.js';
 
 type RequestRow = typeof dateChangeRequests.$inferSelect;
@@ -59,9 +60,8 @@ type BookingRow = typeof bookings.$inferSelect;
 
 const toAmount = (cents: number) => cents / 100;
 
-// A booking's pickup or return, as a moment. The stored times are the island's
-// own; compared in UTC from the date and time as written, like the refund rule.
-const moment = (date: string, time: string) => new Date(`${date}T${time.padEnd(5, '0')}:00Z`);
+// A booking's pickup or return, as a moment, in island time.
+const moment = islandMoment;
 
 // A request past its moment: unanswered at pickup (not started) or at the
 // current return time (under way) — or its booking is no longer running at all.

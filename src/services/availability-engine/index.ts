@@ -19,6 +19,7 @@
 import { and, eq, gt, gte, lt, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { bookings, vehicleBlocks } from '../../db/schema/index.js';
+import { islandDate } from '../../lib/island-time.js';
 
 // How far ahead the "already booked" days are listed for a car's page.
 export const AVAILABILITY_HORIZON_DAYS = 180;
@@ -38,8 +39,10 @@ export function formatDate(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10);
 }
 
+// What day it is ON THE ISLAND. After 8 in the evening there, UTC has already
+// moved on to tomorrow, and a same-day booking used to be refused as "in the past".
 export function today(): string {
-  return formatDate(Date.now());
+  return islandDate();
 }
 
 // How many days a rental runs for: the 1st to the 4th is 3.

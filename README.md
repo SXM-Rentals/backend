@@ -660,10 +660,16 @@ keeps serving the last one that worked. On the paid plan, move them into a
 `preDeployCommand` instead.
 
 **The daily job runs on GitHub**, because the free plan has no scheduled jobs
-(`.github/workflows/daily-tasks.yml`, 06:00 UTC). It needs two repository
-secrets — **Settings → Secrets and variables → Actions** — named
-`PRODUCTION_DATABASE_URL` and `PRODUCTION_ENCRYPTION_KEY`, the same values the
-API has on Render. The **Run workflow** button on the Actions page runs it on
+(`.github/workflows/daily-tasks.yml`, 06:00 and 18:00 UTC — 02:00 and 14:00 on
+the island). It needs two repository secrets — **Settings → Secrets and
+variables → Actions** — named `PRODUCTION_DATABASE_URL` and
+`PRODUCTION_ENCRYPTION_KEY`, the same values the API has on Render. To hold
+deposits and email customers it also needs `STRIPE_SECRET_KEY`,
+`RESEND_API_KEY`, `EMAIL_FROM` and `APP_URL` (and `EXPO_ACCESS_TOKEN` for
+pushes), again the same as on Render.
+
+**Every date and time on a booking is island time** (UTC−4, all year, both
+sides): see `src/lib/island-time.ts`. The **Run workflow** button on the Actions page runs it on
 demand. GitHub pauses schedules in a repository with no activity for 60 days.
 
 **5. The first staff account**, once the API is up:
