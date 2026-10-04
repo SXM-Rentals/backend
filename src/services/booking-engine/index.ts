@@ -277,30 +277,36 @@ export async function createBooking(
       throw conflict('vehicle_unavailable', 'Sorry — this vehicle is not available on all of those dates.');
     }
 
-    // A reference clash is vanishingly unlikely, but retrying is cheap.
+    // A reference clash gets likelier as bookings pile up (there are 9,000
+    // four-digit references), so it is retried. EACH TRY IN ITS OWN SAVEPOINT:
+    // once a statement fails, Postgres refuses everything else in the same
+    // transaction, so a retry without one could never succeed and the customer
+    // got "something went wrong" instead of their booking.
     let booking: typeof bookings.$inferSelect | undefined;
     for (let attempt = 0; attempt < 5 && !booking; attempt += 1) {
       try {
-        [booking] = await tx
-          .insert(bookings)
-          .values({
-            reference: newReference(),
-            customerId: actor.customerId,
-            vehicleId: vehicle.id,
-            providerId: vehicle.providerId,
-            startDate: input.startDate,
-            endDate: input.endDate,
-            pickupTime: input.pickupTime,
-            returnTime: input.returnTime,
-            collection: input.collection,
-            location: input.location?.trim() || vehicle.pickupTown,
-            grossCents: quote.grossCents,
-            commissionCents: quote.commissionCents,
-            payoutCents: quote.payoutCents,
-            totalDueTodayCents: quote.totalDueTodayCents,
-            promotionId,
-          })
-          .returning();
+        [booking] = await tx.transaction(async (attemptTx) =>
+          attemptTx
+            .insert(bookings)
+            .values({
+              reference: newReference(),
+              customerId: actor.customerId,
+              vehicleId: vehicle.id,
+              providerId: vehicle.providerId,
+              startDate: input.startDate,
+              endDate: input.endDate,
+              pickupTime: input.pickupTime,
+              returnTime: input.returnTime,
+              collection: input.collection,
+              location: input.location?.trim() || vehicle.pickupTown,
+              grossCents: quote.grossCents,
+              commissionCents: quote.commissionCents,
+              payoutCents: quote.payoutCents,
+              totalDueTodayCents: quote.totalDueTodayCents,
+              promotionId,
+            })
+            .returning(),
+        );
       } catch (error) {
         const code = (error as { code?: string; cause?: { code?: string } })?.cause?.code;
         if (code !== '23505') throw error;
