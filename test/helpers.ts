@@ -126,6 +126,9 @@ export type FakeGateway = PaymentGateway & {
   identityEventFor(sessionId: string, type: string, lastErrorReason?: string): WebhookEvent;
   // What Stripe's form does when somebody saves a card: puts it on the customer.
   saveCard(stripeCustomerId: string, card: { brand: string; last4: string }): string;
+  // What Stripe would say a payment is now, as if the customer finished it —
+  // without Stripe sending its message. For testing a lost or late message.
+  setStatus(paymentId: string, status: string): void;
   // Builds the message Stripe would send about a payment.
   eventFor(type: string, paymentId: string, overrides?: Record<string, unknown>): WebhookEvent;
   // Builds the message Stripe sends when a business finishes giving details.
@@ -302,6 +305,10 @@ export function createFakeGateway(): FakeGateway {
         type: 'account.updated',
         data: { object: { id: accountId, payouts_enabled: payoutsEnabled, requirements: { currently_due: outstanding } } },
       };
+    },
+
+    setStatus(paymentId, status) {
+      statuses.set(paymentId, status);
     },
 
     eventFor(type, paymentId, overrides = {}) {

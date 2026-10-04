@@ -201,6 +201,24 @@ describe('keeping the car longer', () => {
     expect(again.statusCode).toBe(409);
     expect(again.json().error.code).toBe('already_paid');
   });
+
+  it('records the extra days as paid when Stripe has the money but its message never came', async () => {
+    const booking = await aBooking({ paid: true });
+    const asked = (
+      await post(
+        `/bookings/${booking.id}/date-changes`,
+        { startDate: booking.startDate, endDate: dateIn(nextStart + 5) },
+        auth(customerToken),
+      )
+    ).json();
+    await post(`/providers/me/bookings/${booking.id}/date-changes/${asked.id}/accept`, {}, auth(ownerToken));
+    await post(`/payments/bookings/${booking.id}/date-changes/${asked.id}/intent`, {}, auth(customerToken));
+
+    ctx.gateway.setStatus((await requestRow(asked.id)).stripePaymentIntentId!, 'succeeded');
+    const again = await post(`/payments/bookings/${booking.id}/date-changes/${asked.id}/intent`, {}, auth(customerToken));
+    expect(again.json().error.code).toBe('already_paid');
+    expect((await requestRow(asked.id)).paymentStatus).toBe('paid');
+  });
 });
 
 describe('a shorter rental, and the cancellation policy', () => {

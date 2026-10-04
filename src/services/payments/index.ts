@@ -17,8 +17,24 @@
 // marked paid or held until Stripe says so — never because an app said it went
 // through. Stripe also sends the same message again if it is unsure we received
 // it, so every message is recorded and a repeat is ignored.
+//
+// THREE THINGS THAT GO WRONG IN REAL LIFE, AND WHAT HAPPENS:
+//   - A message is late or lost. Asking to pay (or hold) again then checks with
+//     Stripe first: a payment Stripe already has is recorded exactly as the
+//     message would have recorded it, and the app is told it is done, rather
+//     than being handed a finished payment that Stripe's card sheet refuses.
+//   - A message is about a booking this database has never heard of — a copy of
+//     the backend on somebody's computer sharing the same Stripe test account,
+//     say. Nothing is written and Stripe is told it arrived, so it stops trying.
+//   - Recording a message fails half way (the database hiccups). The message is
+//     only marked handled in the same transaction as the work itself, so the
+//     failure is answered 500 and Stripe's retry gets a second chance.
+//
+// Every "record" below changes something only if it has not happened yet, so the
+// app's check and Stripe's message can both arrive and the payment is still
+// recorded once.
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   bookings,
@@ -112,6 +128,13 @@ export function createPaymentService(deps: PaymentServiceDeps) {
 
       if (booking.stripePaymentIntentId) {
         const existing = await gateway.getPayment(booking.stripePaymentIntentId);
+        // Stripe already has the money and its message has not arrived (or was
+        // lost): record it now, exactly as the message would have.
+        if (existing?.status === 'succeeded') {
+          const recorded = await recordRentalPaid(db, existing.id, booking.totalDueTodayCents);
+          if (recorded.state === 'recorded') await notifications?.paymentSucceeded(recorded.bookingId);
+          throw conflict('already_paid', 'That booking has already been paid for.');
+        }
         if (existing && existing.status !== 'canceled') {
           return { ...existing, paymentId: existing.id, amount: toAmount(booking.totalDueTodayCents) };
         }
@@ -155,6 +178,12 @@ export function createPaymentService(deps: PaymentServiceDeps) {
 
       if (deposit.stripePaymentIntentId) {
         const existing = await gateway.getPayment(deposit.stripePaymentIntentId);
+        // The hold is already on the card and Stripe's message has not arrived:
+        // record it now, and never hand back a hold that is already in place.
+        if (existing?.status === 'requires_capture' || existing?.status === 'succeeded') {
+          if (existing.status === 'requires_capture') await recordDepositHeld(db, existing.id);
+          throw conflict('deposit_already_held', 'That deposit is already being held.');
+        }
         if (existing && existing.status !== 'canceled') {
           return { ...existing, paymentId: existing.id, amount: toAmount(deposit.amountCents) };
         }
@@ -283,114 +312,42 @@ export function createPaymentService(deps: PaymentServiceDeps) {
     },
 
     // ---- WHAT STRIPE TELLS US AFTERWARDS ----
-    // Runs once per message. A repeat is recognised and ignored.
+    // Runs once per message. A repeat is recognised and ignored. The message is
+    // marked handled in the same transaction as the work, so a failure part way
+    // leaves it unmarked and Stripe's retry is not mistaken for a repeat.
     async handleStripeEvent(event: WebhookEvent): Promise<{ handled: boolean }> {
-      const firstTime = await db
-        .insert(processedWebhookEvents)
-        .values({ id: event.id, type: event.type })
-        .onConflictDoNothing()
-        .returning({ id: processedWebhookEvents.id });
-      if (firstTime.length === 0) {
-        logger.info({ eventId: event.id, type: event.type }, 'Stripe message already handled; ignoring repeat');
-        return { handled: false };
+      // Telling the customer happens after the transaction has committed.
+      let afterwards: (() => Promise<void>)[] = [];
+      try {
+        await db.transaction(async (tx) => {
+          const firstTime = await tx
+            .insert(processedWebhookEvents)
+            .values({ id: event.id, type: event.type })
+            .onConflictDoNothing()
+            .returning({ id: processedWebhookEvents.id });
+          if (firstTime.length === 0) throw new Repeat();
+          afterwards = await applyStripeEvent(tx as unknown as Database, event, notifications, logger);
+        });
+      } catch (error) {
+        if (error instanceof Repeat) {
+          logger.info({ eventId: event.id, type: event.type }, 'Stripe message already handled; ignoring repeat');
+          return { handled: false };
+        }
+        if (error instanceof NotOurs) {
+          // Rolled back: nothing about it is kept, not even that it came.
+          logger.info(
+            { eventId: event.id, type: event.type },
+            'Stripe message about a payment this database does not have; ignored',
+          );
+          return { handled: false };
+        }
+        throw error;
       }
-
-      const object = event.data.object;
-      const metadata = (object.metadata ?? {}) as Record<string, string>;
-      const paymentId = typeof object.id === 'string' ? object.id : undefined;
-      const amountCents = typeof object.amount === 'number' ? object.amount : 0;
-      if (!paymentId) return { handled: true };
-
-      switch (event.type) {
-        // The rental has been paid for.
-        case 'payment_intent.succeeded': {
-          // The extra days of a longer rental: the request is marked paid.
-          if (metadata.kind === 'date_change' && metadata.dateChangeId) {
-            await db
-              .update(dateChangeRequests)
-              .set({ paymentStatus: 'paid' })
-              .where(eq(dateChangeRequests.id, metadata.dateChangeId));
-            await recordLedgerEntry(db, metadata.bookingId, 'charge', amountCents, 'succeeded', paymentId);
-            break;
-          }
-          if (metadata.kind !== 'rental') break;
-          await db
-            .update(bookings)
-            .set({ paymentStatus: 'paid' })
-            .where(eq(bookings.stripePaymentIntentId, paymentId));
-          await recordLedgerEntry(db, metadata.bookingId, 'charge', amountCents, 'succeeded', paymentId);
-          if (metadata.bookingId) await notifications?.paymentSucceeded(metadata.bookingId);
-          break;
-        }
-
-        // The card was declined, or the bank's approval was not given.
-        case 'payment_intent.payment_failed': {
-          if (metadata.kind !== 'rental') break;
-          await db
-            .update(bookings)
-            .set({ paymentStatus: 'failed' })
-            .where(eq(bookings.stripePaymentIntentId, paymentId));
-          await recordLedgerEntry(db, metadata.bookingId, 'charge', amountCents, 'failed', paymentId);
-          if (metadata.bookingId) await notifications?.paymentFailed(metadata.bookingId);
-          break;
-        }
-
-        // The deposit hold is now in place on the customer's card. THIS IS NOT
-        // A PAYMENT: nothing has been taken, and nothing is recorded as revenue.
-        case 'payment_intent.amount_capturable_updated': {
-          if (metadata.kind !== 'deposit') break;
-          await db
-            .update(deposits)
-            .set({ status: 'held', authorizedAt: new Date() })
-            .where(eq(deposits.stripePaymentIntentId, paymentId));
-          break;
-        }
-
-        // A hold that has been let go, whether by us or by Stripe expiring it.
-        case 'payment_intent.canceled': {
-          if (metadata.kind !== 'deposit') break;
-          await db
-            .update(deposits)
-            .set({ status: 'released', releasedAt: new Date() })
-            .where(eq(deposits.stripePaymentIntentId, paymentId));
-          break;
-        }
-
-        // Rental money given back.
-        case 'charge.refunded': {
-          const refundedIntent = typeof object.payment_intent === 'string' ? object.payment_intent : paymentId;
-          const [booking] = await db
-            .select({ id: bookings.id })
-            .from(bookings)
-            .where(eq(bookings.stripePaymentIntentId, refundedIntent))
-            .limit(1);
-          if (!booking) break;
-          await db.update(bookings).set({ paymentStatus: 'refunded' }).where(eq(bookings.id, booking.id));
-          await recordLedgerEntry(db, booking.id, 'refund', amountCents, 'succeeded', refundedIntent);
-          break;
-        }
-
-        // A rental business has given Stripe more of its details, so what it
-        // is still waiting for — and whether they can be paid — has changed.
-        case 'account.updated': {
-          const payoutsEnabled = object.payouts_enabled === true;
-          const requirements = object.requirements as { currently_due?: string[] } | undefined;
-          const outstanding = requirements?.currently_due ?? [];
-          await db
-            .update(providerPayoutAccounts)
-            .set({
-              payoutsEnabled,
-              outstanding,
-              status: payoutsEnabled ? 'active' : outstanding.length > 0 ? 'pending' : 'restricted',
-            })
-            .where(eq(providerPayoutAccounts.stripeAccountId, paymentId));
-          break;
-        }
-
-        default:
-          logger.info({ type: event.type }, 'Stripe message of a kind we do not act on');
+      for (const tell of afterwards) {
+        await tell().catch((error: unknown) =>
+          logger.warn({ error: String(error) }, 'Could not tell the customer about a payment'),
+        );
       }
-
       return { handled: true };
     },
   };
@@ -399,6 +356,194 @@ export function createPaymentService(deps: PaymentServiceDeps) {
 export type PaymentService = ReturnType<typeof createPaymentService>;
 
 // ---- SHARED HELPERS ----
+
+// A message Stripe already sent, and we already handled.
+class Repeat extends Error {}
+// A message about a payment this database has no record of.
+class NotOurs extends Error {}
+
+type Recorded = { state: 'recorded'; bookingId: string } | { state: 'already' } | { state: 'unknown' };
+
+// ---- RECORDING WHAT HAPPENED ----
+// Shared by Stripe's messages and by the check made when somebody asks to pay
+// again, so the two can never record the same payment differently. Each one
+// changes something only if it has not happened yet.
+
+// The rental is paid for.
+export async function recordRentalPaid(db: Database, paymentId: string, amountCents: number): Promise<Recorded> {
+  const [paid] = await db
+    .update(bookings)
+    .set({ paymentStatus: 'paid' })
+    .where(and(eq(bookings.stripePaymentIntentId, paymentId), inArray(bookings.paymentStatus, ['authorized', 'failed'])))
+    .returning({ id: bookings.id });
+  if (paid) {
+    await recordLedgerEntry(db, paid.id, 'charge', amountCents, 'succeeded', paymentId);
+    return { state: 'recorded', bookingId: paid.id };
+  }
+  return (await bookingWithPayment(db, paymentId)) ? { state: 'already' } : { state: 'unknown' };
+}
+
+// The extra days of a longer rental are paid for.
+export async function recordDateChangePaid(db: Database, paymentId: string, amountCents: number): Promise<Recorded> {
+  const [paid] = await db
+    .update(dateChangeRequests)
+    .set({ paymentStatus: 'paid' })
+    .where(and(eq(dateChangeRequests.stripePaymentIntentId, paymentId), eq(dateChangeRequests.paymentStatus, 'unpaid')))
+    .returning({ bookingId: dateChangeRequests.bookingId });
+  if (paid) {
+    await recordLedgerEntry(db, paid.bookingId, 'charge', amountCents, 'succeeded', paymentId);
+    return { state: 'recorded', bookingId: paid.bookingId };
+  }
+  const [known] = await db
+    .select({ id: dateChangeRequests.id })
+    .from(dateChangeRequests)
+    .where(eq(dateChangeRequests.stripePaymentIntentId, paymentId))
+    .limit(1);
+  return known ? { state: 'already' } : { state: 'unknown' };
+}
+
+// The deposit hold is in place on the card. Not a payment: nothing is taken.
+export async function recordDepositHeld(db: Database, paymentId: string): Promise<Recorded> {
+  const [held] = await db
+    .update(deposits)
+    .set({ status: 'held', authorizedAt: new Date() })
+    .where(and(eq(deposits.stripePaymentIntentId, paymentId), eq(deposits.status, 'not_taken')))
+    .returning({ bookingId: deposits.bookingId });
+  if (held) return { state: 'recorded', bookingId: held.bookingId };
+  return (await depositWithPayment(db, paymentId)) ? { state: 'already' } : { state: 'unknown' };
+}
+
+async function bookingWithPayment(db: Database, paymentId: string) {
+  const [row] = await db.select({ id: bookings.id }).from(bookings).where(eq(bookings.stripePaymentIntentId, paymentId)).limit(1);
+  return row;
+}
+
+async function depositWithPayment(db: Database, paymentId: string) {
+  const [row] = await db.select({ id: deposits.id }).from(deposits).where(eq(deposits.stripePaymentIntentId, paymentId)).limit(1);
+  return row;
+}
+
+// What one of Stripe's messages changes. Throws NotOurs when it is about a
+// payment this database does not have. Returns what to tell the customer once
+// the change is safely saved.
+async function applyStripeEvent(
+  db: Database,
+  event: WebhookEvent,
+  notifications: PaymentNotifier | undefined,
+  logger: Logger,
+): Promise<(() => Promise<void>)[]> {
+  const object = event.data.object;
+  const metadata = (object.metadata ?? {}) as Record<string, string>;
+  const paymentId = typeof object.id === 'string' ? object.id : undefined;
+  const amountCents = typeof object.amount === 'number' ? object.amount : 0;
+  if (!paymentId) return [];
+  const known = (recorded: Recorded) => {
+    if (recorded.state === 'unknown') throw new NotOurs();
+  };
+
+  switch (event.type) {
+    // A payment went through: the rental, or the extra days of a longer one.
+    case 'payment_intent.succeeded': {
+      if (metadata.kind === 'date_change') {
+        known(await recordDateChangePaid(db, paymentId, amountCents));
+        return [];
+      }
+      if (metadata.kind !== 'rental') return [];
+      const recorded = await recordRentalPaid(db, paymentId, amountCents);
+      known(recorded);
+      return recorded.state === 'recorded' && notifications
+        ? [() => notifications.paymentSucceeded(recorded.bookingId)]
+        : [];
+    }
+
+    // The card was declined, or the bank's approval was not given. Each failed
+    // try is recorded; a booking already paid is never marked failed.
+    case 'payment_intent.payment_failed': {
+      if (metadata.kind !== 'rental') return [];
+      const [failed] = await db
+        .update(bookings)
+        .set({ paymentStatus: 'failed' })
+        .where(and(eq(bookings.stripePaymentIntentId, paymentId), inArray(bookings.paymentStatus, ['authorized', 'failed'])))
+        .returning({ id: bookings.id });
+      if (!failed) {
+        if (!(await bookingWithPayment(db, paymentId))) throw new NotOurs();
+        return [];
+      }
+      await recordLedgerEntry(db, failed.id, 'charge', amountCents, 'failed', paymentId);
+      return notifications ? [() => notifications.paymentFailed(failed.id)] : [];
+    }
+
+    // The deposit hold is now in place on the customer's card. THIS IS NOT A
+    // PAYMENT: nothing has been taken, and nothing is recorded as revenue.
+    case 'payment_intent.amount_capturable_updated': {
+      if (metadata.kind !== 'deposit') return [];
+      known(await recordDepositHeld(db, paymentId));
+      return [];
+    }
+
+    // A hold that has been let go, whether by us or by Stripe expiring it. A
+    // deposit already settled after a claim stays settled.
+    case 'payment_intent.canceled': {
+      if (metadata.kind !== 'deposit') return [];
+      const [released] = await db
+        .update(deposits)
+        .set({ status: 'released', releasedAt: new Date() })
+        .where(and(eq(deposits.stripePaymentIntentId, paymentId), inArray(deposits.status, ['not_taken', 'held'])))
+        .returning({ id: deposits.id });
+      if (!released && !(await depositWithPayment(db, paymentId))) throw new NotOurs();
+      return [];
+    }
+
+    // Rental money given back. Stripe says how much of the charge has been
+    // refunded IN ALL so far; only what is new is recorded. A refund approved
+    // in the admin panel was already written down as pending, so it is marked
+    // done rather than written a second time.
+    case 'charge.refunded': {
+      const refundedIntent = typeof object.payment_intent === 'string' ? object.payment_intent : paymentId;
+      const booking = await bookingWithPayment(db, refundedIntent);
+      if (!booking) throw new NotOurs();
+      const refundedInAll = typeof object.amount_refunded === 'number' ? object.amount_refunded : amountCents;
+      const ofThisRefund = and(
+        eq(ledgerEntries.bookingId, booking.id),
+        eq(ledgerEntries.stripeRef, refundedIntent),
+        eq(ledgerEntries.kind, 'refund'),
+      );
+      await db.update(ledgerEntries).set({ status: 'succeeded' }).where(and(ofThisRefund, eq(ledgerEntries.status, 'pending')));
+      const [already] = await db
+        .select({ total: sql<number>`coalesce(sum(${ledgerEntries.amountCents}), 0)::int` })
+        .from(ledgerEntries)
+        .where(ofThisRefund);
+      const fresh = refundedInAll - (already?.total ?? 0);
+      // Refunded some other way — in Stripe's own dashboard, say.
+      if (fresh > 0) await recordLedgerEntry(db, booking.id, 'refund', fresh, 'succeeded', refundedIntent);
+      await db.update(bookings).set({ paymentStatus: 'refunded' }).where(eq(bookings.id, booking.id));
+      return [];
+    }
+
+    // A rental business has given Stripe more of its details, so what it is
+    // still waiting for — and whether they can be paid — has changed.
+    case 'account.updated': {
+      const payoutsEnabled = object.payouts_enabled === true;
+      const requirements = object.requirements as { currently_due?: string[] } | undefined;
+      const outstanding = requirements?.currently_due ?? [];
+      const [updated] = await db
+        .update(providerPayoutAccounts)
+        .set({
+          payoutsEnabled,
+          outstanding,
+          status: payoutsEnabled ? 'active' : outstanding.length > 0 ? 'pending' : 'restricted',
+        })
+        .where(eq(providerPayoutAccounts.stripeAccountId, paymentId))
+        .returning({ id: providerPayoutAccounts.providerId });
+      if (!updated) throw new NotOurs();
+      return [];
+    }
+
+    default:
+      logger.info({ type: event.type }, 'Stripe message of a kind we do not act on');
+      return [];
+  }
+}
 
 async function loadDeposit(db: Database, depositId: string) {
   if (!isUuid(depositId)) throw notFound('We could not find that deposit.');

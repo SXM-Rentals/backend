@@ -51,6 +51,7 @@ import { countRentalDays, isVehicleFree, today } from '../availability-engine/in
 import { commissionRateBps, quoteBooking, refundDue } from '../booking-engine/index.js';
 import { isFeatureOn, requireFeature } from '../capabilities/index.js';
 import { discountOfBooking } from '../promotions/index.js';
+import { recordDateChangePaid } from '../payments/index.js';
 import type { PushService } from '../push/index.js';
 
 type RequestRow = typeof dateChangeRequests.$inferSelect;
@@ -480,6 +481,13 @@ export function createDateChangeService(deps: DateChangeServiceDeps) {
 
       if (row.stripePaymentIntentId) {
         const existing = await gateway.getPayment(row.stripePaymentIntentId);
+        // Stripe already has the money and its message has not arrived: record
+        // it now, as the message would have, rather than hand back a finished
+        // payment that Stripe's card sheet refuses.
+        if (existing?.status === 'succeeded') {
+          await recordDateChangePaid(db, existing.id, row.differenceCents);
+          throw conflict('already_paid', 'The extra days have already been paid for.');
+        }
         if (existing && existing.status !== 'canceled') {
           return { clientSecret: existing.clientSecret, amount: toAmount(row.differenceCents), status: existing.status };
         }
