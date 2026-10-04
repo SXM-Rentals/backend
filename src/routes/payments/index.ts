@@ -36,16 +36,24 @@ export type PaymentRouteOptions = { payments: PaymentService; config: Config; da
 const dateChangeParams = z.object({ id: z.string().max(64), requestId: z.string().max(64) });
 
 const idParam = z.object({ id: z.string().max(64) });
+const intentBody = z.object({ saveCardForDeposit: z.boolean().optional() });
 
 export default async function paymentRoutes(app: FastifyInstance, options: PaymentRouteOptions) {
+  // saveCardForDeposit: true only once the customer has been shown, beside the
+  // pay button, that the card will also be used for the deposit hold. Left out,
+  // the payment is exactly as it always was.
   app.post('/bookings/:id/intent', async (request) => {
     const actor = requireCustomer(request);
     const { id } = parseInput(idParam, request.params);
-    const payment = await options.payments.startRentalPayment(actor, id);
+    const { saveCardForDeposit } = parseInput(intentBody, request.body ?? {});
+    const payment = await options.payments.startRentalPayment(actor, id, { saveCardForDeposit });
     return {
       clientSecret: payment.clientSecret,
       amount: payment.amount,
       status: payment.status,
+      // The deposit beside it: its amount, whether this payment saves the card
+      // for it, and when it will be held. Null when there is no deposit.
+      deposit: payment.deposit,
     };
   });
 

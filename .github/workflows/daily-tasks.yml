@@ -5,13 +5,21 @@
 #   1. moves bookings on as the dates pass (active on the day, completed once
 #      the car is due back),
 #   2. sends tomorrow's collection and return reminders, and
-#   3. gathers what each rental business is owed into a payout, ready to send.
-# It never sends money itself. Everything in it is safe to run twice.
+#   3. holds each deposit that is due on the card the customer saved for it,
+#   4. gathers what each rental business is owed into a payout, ready to send.
+# It never sends money itself. Everything in it is safe to run twice — and it
+# DOES run twice a day, so one late or skipped run never means a car is
+# collected without its deposit held.
 #
 # IT NEEDS TWO SECRETS in the repository settings (Settings → Secrets and
 # variables → Actions): PRODUCTION_DATABASE_URL and PRODUCTION_ENCRYPTION_KEY —
 # the same two values the API has on Render. Until they are set, the run fails
 # with a clear message and changes nothing.
+#
+# AND, FOR EVERYTHING TO WORK, the same values again as on Render:
+# STRIPE_SECRET_KEY (to hold deposits), RESEND_API_KEY and EMAIL_FROM (to email
+# customers), APP_URL (the links in those emails) and EXPO_ACCESS_TOKEN (pushes).
+# Each one left unset simply switches that part off, with a line in the log.
 #
 # Worth knowing: GitHub may start a scheduled run a little late when it is busy,
 # and it pauses schedules in a repository that has had no activity for 60 days.
@@ -27,6 +35,9 @@ on:
     # 06:00 UTC is early morning on the island, so a reminder about tomorrow
     # arrives at a sensible hour rather than in the middle of the night.
     - cron: '0 6 * * *'
+    # And again in the afternoon, so a deposit due to be held is never more than
+    # half a day late, even if one run is skipped.
+    - cron: '0 18 * * *'
   workflow_dispatch:
 
 # Only one run at a time, so a late scheduled run and a manual one cannot
@@ -66,4 +77,10 @@ jobs:
           NODE_ENV: production
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.PRODUCTION_ENCRYPTION_KEY }}
+          # Optional: each one left unset switches its part off.
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          APP_URL: ${{ secrets.APP_URL }}
+          EXPO_ACCESS_TOKEN: ${{ secrets.EXPO_ACCESS_TOKEN }}
         run: node dist/scripts/daily-tasks.js

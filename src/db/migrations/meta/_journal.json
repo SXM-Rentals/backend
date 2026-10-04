@@ -169,6 +169,13 @@
       "when": 1791056915742,
       "tag": "0023_call_lines",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791125998891,
+      "tag": "0024_automatic_deposit_holds",
+      "breakpoints": true
     }
   ]
 }

@@ -29,6 +29,11 @@ export type PaymentRecord = {
   // Used once by the app to complete the payment on the customer's device.
   clientSecret: string;
   status: string;
+  // Whether paying also saves the card on the customer's Stripe record, for
+  // holding the deposit later without them there.
+  savesCard?: boolean;
+  // The card (or other method) that paid, once it has.
+  paymentMethodId?: string | null;
 };
 
 // A message from Stripe about something that happened.
@@ -43,7 +48,18 @@ export type RentalPaymentInput = {
   bookingReference: string;
   amountCents: number;
   customerEmail?: string | undefined;
+  // Set when the customer agreed to the card also being used for the deposit
+  // hold: the card is saved on their Stripe record as it pays.
+  saveCardFor?: { stripeCustomerId: string } | undefined;
 };
+
+// Holding the deposit on a saved card, with the customer not there.
+export type OffSessionHoldInput = DepositHoldInput & { stripeCustomerId: string; paymentMethodId: string };
+export type OffSessionHold =
+  | { outcome: 'held'; paymentId: string }
+  // The bank wants the customer to approve it, or the card was declined. Never
+  // retried on its own: the customer is told and holds it themselves.
+  | { outcome: 'needs_customer'; reason: 'authentication_required' | 'declined'; paymentId: string | null; code: string };
 
 // Paying for the extra days of a rental whose dates were changed.
 export type DateChangePaymentInput = {
@@ -90,6 +106,12 @@ export type PaymentGateway = {
   createDateChangePayment(input: DateChangePaymentInput): Promise<PaymentRecord>;
   // Place a hold on the card for the deposit. Nothing is taken.
   createDepositHold(input: DepositHoldInput): Promise<PaymentRecord>;
+  // The same hold, placed on the card saved when the rental was paid, without
+  // the customer there. Still only a hold: nothing is taken.
+  holdDepositOffSession(input: OffSessionHoldInput): Promise<OffSessionHold>;
+  // An unpaid rental payment started before the card could be saved with it:
+  // made to save the card when it pays.
+  saveCardOnPayment(paymentId: string, stripeCustomerId: string): Promise<PaymentRecord>;
   // Look up a payment we started earlier.
   getPayment(paymentId: string): Promise<PaymentRecord | null>;
   // Keep some or all of a held deposit (only ever after a written claim).
@@ -160,6 +182,9 @@ export function createStripeGateway(options: {
     id: intent.id,
     clientSecret: intent.client_secret ?? '',
     status: intent.status,
+    savesCard: intent.setup_future_usage === 'off_session' && Boolean(intent.customer),
+    paymentMethodId:
+      typeof intent.payment_method === 'string' ? intent.payment_method : (intent.payment_method?.id ?? null),
   });
 
   return {
@@ -173,13 +198,20 @@ export function createStripeGateway(options: {
           metadata: { kind: 'rental', bookingId: input.bookingId, reference: input.bookingReference },
           receipt_email: input.customerEmail,
           automatic_payment_methods: { enabled: true },
+          // With the customer's agreement: the card that pays is also kept on
+          // their Stripe record, for holding the deposit two days before pickup.
+          ...(input.saveCardFor
+            ? { customer: input.saveCardFor.stripeCustomerId, setup_future_usage: 'off_session' as const }
+            : {}),
         },
         // Asking twice for the same booking returns the same payment rather
         // than creating a second one.
         // The amount is part of the key: a booking whose dates (and so its
         // price) changed before it was paid gets a payment for the new amount,
         // where the same key would hand back the old one.
-        { idempotencyKey: `rental-${input.bookingId}-${input.amountCents}` },
+        // Whether the card is saved is part of it too: Stripe refuses a key used
+        // again with different settings.
+        { idempotencyKey: `rental-${input.bookingId}-${input.amountCents}${input.saveCardFor ? '-save' : ''}` },
       );
       return toRecord(intent);
     },
@@ -221,6 +253,63 @@ export function createStripeGateway(options: {
         { idempotencyKey: `deposit-${input.depositId}` },
       );
       return toRecord(intent);
+    },
+
+    async holdDepositOffSession(input) {
+      try {
+        const intent = await stripe.paymentIntents.create(
+          {
+            amount: input.amountCents,
+            currency,
+            // STILL ONLY A HOLD: authorised, never taken unless a claim is agreed.
+            capture_method: 'manual',
+            customer: input.stripeCustomerId,
+            payment_method: input.paymentMethodId,
+            off_session: true,
+            confirm: true,
+            // No page to send anybody to: the customer is not there.
+            automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+            // The same as a hold the customer places, so the same message from
+            // Stripe marks it held.
+            metadata: {
+              kind: 'deposit',
+              bookingId: input.bookingId,
+              depositId: input.depositId,
+              reference: input.bookingReference,
+              placedBy: 'automatic',
+            },
+          },
+          // Its own key: the customer's own hold uses deposit-<id> with
+          // different settings. Asking twice gives the same hold back.
+          { idempotencyKey: `deposit-auto-${input.depositId}` },
+        );
+        if (intent.status === 'requires_capture') return { outcome: 'held', paymentId: intent.id };
+        return {
+          outcome: 'needs_customer',
+          reason: intent.status === 'requires_action' ? 'authentication_required' : 'declined',
+          paymentId: intent.id,
+          code: intent.status,
+        };
+      } catch (error) {
+        // A card problem is the customer's to sort out; anything else (Stripe
+        // unreachable, say) is thrown and simply tried again on the next run.
+        if (error instanceof Stripe.errors.StripeCardError) {
+          const code = error.code ?? error.decline_code ?? 'card_declined';
+          return {
+            outcome: 'needs_customer',
+            reason: code === 'authentication_required' ? 'authentication_required' : 'declined',
+            paymentId: error.payment_intent?.id ?? null,
+            code,
+          };
+        }
+        throw error;
+      }
+    },
+
+    async saveCardOnPayment(paymentId, stripeCustomerId) {
+      return toRecord(
+        await stripe.paymentIntents.update(paymentId, { customer: stripeCustomerId, setup_future_usage: 'off_session' }),
+      );
     },
 
     async getPayment(paymentId) {
@@ -417,6 +506,8 @@ export function createUnconfiguredGateway(): PaymentGateway {
     createRentalPayment: refuse,
     createDateChangePayment: refuse,
     createDepositHold: refuse,
+    holdDepositOffSession: refuse,
+    saveCardOnPayment: refuse,
     getPayment: refuse,
     captureDepositHold: refuse,
     cancelDepositHold: refuse,

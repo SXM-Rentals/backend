@@ -95,8 +95,12 @@ describe('paying for a rental', () => {
     expect(intent.statusCode).toBe(200);
     expect(intent.json()).toMatchObject({ amount: 204.75, status: 'requires_payment_method' });
     expect(intent.json().clientSecret).toMatch(/_secret$/);
-    // The card number never comes near this server — only the secret does.
-    expect(intent.body).not.toMatch(/card|number|cvc/i);
+    // The card number never comes near this server — only the secret does. No
+    // field for a number or a security code, and no long run of digits. (The
+    // word "card" alone is allowed: deposit.savesCard says whether the card is
+    // saved, never what it is.)
+    expect(intent.body).not.toMatch(/cardNumber|"number"|cvc|cvv|\d{12,}/i);
+    expect(Object.keys(intent.json()).sort()).toEqual(['amount', 'clientSecret', 'deposit', 'status']);
 
     // Being handed a secret is not payment. Stripe has said nothing yet.
     const [row] = await ctx.db.select().from(bookings).where(eq(bookings.id, booking.id));

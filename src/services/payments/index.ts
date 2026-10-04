@@ -33,8 +33,24 @@
 // Every "record" below changes something only if it has not happened yet, so the
 // app's check and Stripe's message can both arrive and the payment is still
 // recorded once.
+//
+// ---- THE DEPOSIT, HELD AUTOMATICALLY ON THE CARD THAT PAID ----
+// The customer pays once. With their agreement in so many words
+// ("saveCardForDeposit"), the card that pays for the rental is saved on their
+// Stripe record, and the deposit hold is placed on it by itself two days before
+// pickup — or straight after paying, when pickup is sooner than that.
+//
+// IT IS STILL ONLY A HOLD. A separate payment, authorised and never taken unless
+// a claim is agreed: never part of the rental, never commissioned, never paid
+// out. Not placed at booking because a hold lasts about a week, and would be
+// gone before a car booked weeks ahead was collected.
+//
+// When it cannot go through — the bank wants the customer to approve it, or the
+// card is declined — it is NOT retried: the customer is told (in the app, by
+// email and by push) and holds it with the existing button. That button stays,
+// for exactly this.
 
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   bookings,
@@ -46,7 +62,7 @@ import {
   providerPayoutAccounts,
 } from '../../db/schema/index.js';
 import { holdExpiresAt, holdWindowOpensAt } from './holds.js';
-import type { PaymentGateway, WebhookEvent } from '../../lib/stripe.js';
+import type { OffSessionHold, PaymentGateway, PaymentRecord, WebhookEvent } from '../../lib/stripe.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isUuid, type Actor } from '../../lib/ownership.js';
 
@@ -62,6 +78,8 @@ export type PaymentNotifier = {
   paymentFailed(bookingId: string): Promise<void>;
   depositReleased(depositId: string): Promise<void>;
   depositClaimed(depositId: string): Promise<void>;
+  // The automatic hold could not go through; the customer has to hold it.
+  depositHoldNeeded(depositId: string, reason: 'authentication_required' | 'declined'): Promise<void>;
 };
 
 export type PaymentServiceDeps = {
@@ -78,6 +96,16 @@ export type PaymentStart = {
   status: string;
   amount: number;
 };
+
+// Beside the rental payment: the deposit, so the page can say in words what will
+// happen to it. Null when the booking has no deposit.
+export type DepositPlan = {
+  amount: number;
+  // Paying also saves the card, with the customer's agreement, for the hold.
+  savesCard: boolean;
+  // When the hold is placed: two days before pickup.
+  holdFrom: string;
+} | null;
 
 const toAmount = (cents: number) => cents / 100;
 
@@ -120,11 +148,48 @@ export function createPaymentService(deps: PaymentServiceDeps) {
   return {
     // ---- PAYING FOR THE RENTAL ----
     // Asking twice gives the same payment back rather than starting a second.
-    async startRentalPayment(actor: Actor, bookingId: string): Promise<PaymentStart> {
+    // options.saveCardForDeposit: the customer was shown, and agreed to, the
+    // card also being used for the deposit hold. Left out — as every app
+    // released before this leaves it — the payment is exactly as it always was.
+    async startRentalPayment(
+      actor: Actor,
+      bookingId: string,
+      options: { saveCardForDeposit?: boolean | undefined } = {},
+    ): Promise<PaymentStart & { deposit: DepositPlan }> {
       const booking = await loadOwnBooking(actor, bookingId);
       if (booking.paymentStatus === 'paid') {
         throw conflict('already_paid', 'That booking has already been paid for.');
       }
+
+      const [deposit] = await db.select().from(deposits).where(eq(deposits.bookingId, booking.id)).limit(1);
+      // Only a deposit still to be held, and only when the customer agreed.
+      const saving = Boolean(options.saveCardForDeposit && deposit && deposit.amountCents > 0 && deposit.status === 'not_taken');
+      const stripeCustomerId = saving ? await stripeCustomerFor(actor, { create: true }) : null;
+
+      const answer = async (payment: PaymentRecord) => {
+        const savesCard = payment.savesCard === true;
+        // The evidence of consent: the first time they agreed, kept on the deposit.
+        if (saving && savesCard) {
+          await db
+            .update(deposits)
+            .set({ holdConsentAt: new Date() })
+            .where(and(eq(deposits.id, deposit!.id), isNull(deposits.holdConsentAt)));
+        }
+        return {
+          paymentId: payment.id,
+          clientSecret: payment.clientSecret,
+          status: payment.status,
+          amount: toAmount(booking.totalDueTodayCents),
+          deposit:
+            deposit && deposit.amountCents > 0
+              ? {
+                  amount: toAmount(deposit.amountCents),
+                  savesCard,
+                  holdFrom: holdWindowOpensAt(booking.startDate, booking.pickupTime).toISOString(),
+                }
+              : null,
+        };
+      };
 
       if (booking.stripePaymentIntentId) {
         const existing = await gateway.getPayment(booking.stripePaymentIntentId);
@@ -133,10 +198,22 @@ export function createPaymentService(deps: PaymentServiceDeps) {
         if (existing?.status === 'succeeded') {
           const recorded = await recordRentalPaid(db, existing.id, booking.totalDueTodayCents);
           if (recorded.state === 'recorded') await notifications?.paymentSucceeded(recorded.bookingId);
+          // And, as the message would have, keep the card and hold the deposit
+          // now if pickup is already within two days.
+          if (existing.savesCard && existing.paymentMethodId) {
+            await rememberCardThatPaid(db, booking.id, existing.paymentMethodId);
+            await placeDueDepositHolds({ db, gateway, logger, notifications }, { bookingId: booking.id });
+          }
           throw conflict('already_paid', 'That booking has already been paid for.');
         }
         if (existing && existing.status !== 'canceled') {
-          return { ...existing, paymentId: existing.id, amount: toAmount(booking.totalDueTodayCents) };
+          // Started before the card could be saved with it. Still waiting for a
+          // card, so it can be made to save it — never handed back as one that
+          // will not, when the customer has just agreed that it will.
+          if (saving && !existing.savesCard && ['requires_payment_method', 'requires_confirmation'].includes(existing.status)) {
+            return answer(await gateway.saveCardOnPayment(existing.id, stripeCustomerId!));
+          }
+          return answer(existing);
         }
       }
 
@@ -144,13 +221,14 @@ export function createPaymentService(deps: PaymentServiceDeps) {
         bookingId: booking.id,
         bookingReference: booking.reference,
         amountCents: booking.totalDueTodayCents,
+        saveCardFor: saving ? { stripeCustomerId: stripeCustomerId! } : undefined,
       });
       await db
         .update(bookings)
         .set({ stripePaymentIntentId: payment.id })
         .where(eq(bookings.id, booking.id));
 
-      return { ...payment, paymentId: payment.id, amount: toAmount(booking.totalDueTodayCents) };
+      return answer(payment);
     },
 
     // ---- HOLDING THE SECURITY DEPOSIT ----
@@ -174,6 +252,11 @@ export function createPaymentService(deps: PaymentServiceDeps) {
           'too_early',
           `The deposit can be held from ${opensAt.toISOString().slice(0, 16).replace('T', ' at ')} (UTC), two days before pickup. A hold on a card only lasts about a week, so placing it sooner would mean it had gone before you collected the car.`,
         );
+      }
+
+      // The saved card is being used for it this very moment.
+      if (deposit.autoHoldStatus === 'placing' && deposit.autoHoldTriedAt && Date.now() - deposit.autoHoldTriedAt.getTime() < 10 * 60_000) {
+        throw conflict('hold_in_progress', 'The deposit is being held on your saved card right now. Check again in a minute.');
       }
 
       if (deposit.stripePaymentIntentId) {
@@ -223,6 +306,12 @@ export function createPaymentService(deps: PaymentServiceDeps) {
       if (!stripeCustomerId || !(await gateway.removeCard(stripeCustomerId, cardId))) {
         throw notFound('We could not find that card.');
       }
+      // A deposit waiting to be held on that card no longer can be: the
+      // customer holds it themselves, as before.
+      await db
+        .update(deposits)
+        .set({ paymentMethodId: null })
+        .where(and(eq(deposits.paymentMethodId, cardId), eq(deposits.status, 'not_taken')));
     },
 
     async makeDefaultCard(actor: Actor, cardId: string) {
@@ -251,6 +340,12 @@ export function createPaymentService(deps: PaymentServiceDeps) {
         // When the customer may place the hold, so the app can say so rather
         // than offer a button that will be refused.
         holdOpensAt: holdWindowOpensAt(booking.startDate, booking.pickupTime).toISOString(),
+        // Whether the backend will hold it by itself on the card that paid:
+        //   scheduled       a card is saved and agreed to; held at autoHoldAt
+        //   needs_customer  tried and could not go through; autoHoldProblem says
+        //                   why, and the "Hold the deposit" button fixes it
+        //   off             no saved card for it; the button, as before
+        ...autoHoldView(deposit, booking),
         releasedAt: deposit.releasedAt?.toISOString() ?? null,
         // Shown only when part of it was kept, always with the written reason.
         ...(deposit.status === 'claimed'
@@ -326,7 +421,9 @@ export function createPaymentService(deps: PaymentServiceDeps) {
             .onConflictDoNothing()
             .returning({ id: processedWebhookEvents.id });
           if (firstTime.length === 0) throw new Repeat();
-          afterwards = await applyStripeEvent(tx as unknown as Database, event, notifications, logger);
+          afterwards = await applyStripeEvent(tx as unknown as Database, event, notifications, logger, (bookingId) =>
+            placeDueDepositHolds({ db, gateway, logger, notifications }, { bookingId }).then(() => undefined),
+          );
         });
       } catch (error) {
         if (error instanceof Repeat) {
@@ -413,6 +510,153 @@ export async function recordDepositHeld(db: Database, paymentId: string): Promis
   return (await depositWithPayment(db, paymentId)) ? { state: 'already' } : { state: 'unknown' };
 }
 
+// The card that paid, saved with the customer's agreement, kept beside that
+// agreement on the deposit — so the hold never depends on looking the old
+// payment up later.
+export async function rememberCardThatPaid(db: Database, bookingId: string, paymentMethodId: string) {
+  await db
+    .update(deposits)
+    .set({ paymentMethodId })
+    .where(
+      and(
+        eq(deposits.bookingId, bookingId),
+        isNotNull(deposits.holdConsentAt),
+        isNull(deposits.paymentMethodId),
+        eq(deposits.status, 'not_taken'),
+      ),
+    );
+}
+
+// ---- HOLDING DEPOSITS THAT ARE DUE, WITHOUT THE CUSTOMER THERE ----
+// Run by the daily job (twice a day), and straight after a rental is paid. A
+// deposit is held here only when ALL of these are true: it has not been held,
+// the booking is still on, a card was saved for it with the customer's
+// agreement, its window has opened (two days before pickup), no hold is already
+// on its way, and it has not already needed the customer. Running it twice holds
+// nothing twice: each deposit is claimed before Stripe is asked, and Stripe is
+// asked with a key of its own that hands the same hold back.
+const STALE_CLAIM_MS = 60 * 60_000;
+
+export async function placeDueDepositHolds(
+  deps: { db: Database; gateway: PaymentGateway; logger: Logger; notifications?: PaymentNotifier | undefined },
+  options: { now?: Date; bookingId?: string } = {},
+): Promise<{ held: number; needsCustomer: number; failed: number }> {
+  const { db, gateway, logger, notifications } = deps;
+  const now = options.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - STALE_CLAIM_MS);
+  // Not yet tried — or a try that stopped half way an hour ago (the job died).
+  const free = or(
+    isNull(deposits.autoHoldStatus),
+    and(eq(deposits.autoHoldStatus, 'placing'), lt(deposits.autoHoldTriedAt, staleBefore)),
+  );
+  const ready = and(
+    eq(deposits.status, 'not_taken'),
+    gt(deposits.amountCents, 0),
+    isNotNull(deposits.paymentMethodId),
+    isNotNull(deposits.holdConsentAt),
+    isNull(deposits.stripePaymentIntentId),
+    free,
+  );
+
+  const due = await db
+    .select({ deposit: deposits, booking: bookings, stripeCustomerId: customers.stripeCustomerId })
+    .from(deposits)
+    .innerJoin(bookings, eq(bookings.id, deposits.bookingId))
+    .innerJoin(customers, eq(customers.id, bookings.customerId))
+    .where(
+      and(
+        ready,
+        inArray(bookings.status, ['upcoming', 'active']),
+        isNotNull(customers.stripeCustomerId),
+        options.bookingId ? eq(bookings.id, options.bookingId) : undefined,
+      ),
+    );
+
+  const tally = { held: 0, needsCustomer: 0, failed: 0 };
+  for (const row of due) {
+    // Not before its window: a hold placed sooner would be gone before pickup.
+    if (now.getTime() < holdWindowOpensAt(row.booking.startDate, row.booking.pickupTime).getTime()) continue;
+
+    // Claimed first, so two runs at the same moment cannot both place it.
+    const [claimed] = await db
+      .update(deposits)
+      .set({ autoHoldStatus: 'placing', autoHoldTriedAt: now })
+      .where(and(eq(deposits.id, row.deposit.id), ready))
+      .returning({ id: deposits.id });
+    if (!claimed) continue;
+
+    let outcome: OffSessionHold;
+    try {
+      outcome = await gateway.holdDepositOffSession({
+        bookingId: row.booking.id,
+        bookingReference: row.booking.reference,
+        depositId: row.deposit.id,
+        amountCents: row.deposit.amountCents,
+        stripeCustomerId: row.stripeCustomerId!,
+        paymentMethodId: row.deposit.paymentMethodId!,
+      });
+    } catch (error) {
+      // Stripe unreachable, or similar: let go of the claim and try on the next
+      // run. Not a card problem, so the customer is not troubled with it.
+      await db.update(deposits).set({ autoHoldStatus: null }).where(eq(deposits.id, row.deposit.id));
+      logger.warn({ depositId: row.deposit.id, error: String(error) }, 'Could not place a deposit hold; will try again');
+      tally.failed += 1;
+      continue;
+    }
+
+    if (outcome.outcome === 'held') {
+      await db
+        .update(deposits)
+        .set({ stripePaymentIntentId: outcome.paymentId, autoHoldStatus: 'placed' })
+        .where(eq(deposits.id, row.deposit.id));
+      // Stripe answered "held" there and then; its message will say the same.
+      await recordDepositHeld(db, outcome.paymentId);
+      tally.held += 1;
+      continue;
+    }
+
+    // The bank wants the customer, or the card was declined. Recorded once, the
+    // customer told once, and never tried again on its own.
+    const amount = dollars(row.deposit.amountCents);
+    await db
+      .update(deposits)
+      .set({
+        autoHoldStatus: 'needs_customer',
+        autoHoldProblem:
+          outcome.reason === 'authentication_required'
+            ? `Your bank wants you to approve the ${amount} deposit hold. Tap "Hold the deposit" to do it.`
+            : `Your card could not be used for the ${amount} deposit hold. Tap "Hold the deposit" to use a card.`,
+      })
+      .where(eq(deposits.id, row.deposit.id));
+    // The half-made hold is let go. It was never linked to the deposit, so the
+    // message Stripe sends about cancelling it changes nothing here.
+    if (outcome.paymentId) {
+      await gateway.cancelDepositHold(outcome.paymentId).catch(() => undefined);
+    }
+    await notifications?.depositHoldNeeded(row.deposit.id, outcome.reason).catch(() => undefined);
+    tally.needsCustomer += 1;
+  }
+  return tally;
+}
+
+// What the deposit panel says about the automatic hold.
+function autoHoldView(deposit: typeof deposits.$inferSelect, booking: typeof bookings.$inferSelect) {
+  if (deposit.autoHoldStatus === 'needs_customer') {
+    return { autoHold: 'needs_customer' as const, autoHoldAt: null, autoHoldProblem: deposit.autoHoldProblem };
+  }
+  if (deposit.paymentMethodId && deposit.holdConsentAt) {
+    return {
+      autoHold: 'scheduled' as const,
+      autoHoldAt: holdWindowOpensAt(booking.startDate, booking.pickupTime).toISOString(),
+      autoHoldProblem: null,
+    };
+  }
+  return { autoHold: 'off' as const, autoHoldAt: null, autoHoldProblem: null };
+}
+
+// 50000 → "$500", 5550 → "$55.50".
+const dollars = (cents: number) => (cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`);
+
 async function bookingWithPayment(db: Database, paymentId: string) {
   const [row] = await db.select({ id: bookings.id }).from(bookings).where(eq(bookings.stripePaymentIntentId, paymentId)).limit(1);
   return row;
@@ -431,6 +675,9 @@ async function applyStripeEvent(
   event: WebhookEvent,
   notifications: PaymentNotifier | undefined,
   logger: Logger,
+  // Places the deposit hold now if its window is already open (pickup within two
+  // days). Run after the payment is safely saved.
+  holdDepositIfDue: (bookingId: string) => Promise<void>,
 ): Promise<(() => Promise<void>)[]> {
   const object = event.data.object;
   const metadata = (object.metadata ?? {}) as Record<string, string>;
@@ -451,9 +698,18 @@ async function applyStripeEvent(
       if (metadata.kind !== 'rental') return [];
       const recorded = await recordRentalPaid(db, paymentId, amountCents);
       known(recorded);
-      return recorded.state === 'recorded' && notifications
-        ? [() => notifications.paymentSucceeded(recorded.bookingId)]
-        : [];
+      const after: (() => Promise<void>)[] = [];
+      if (recorded.state === 'recorded' && notifications) after.push(() => notifications.paymentSucceeded(recorded.bookingId));
+      // Paid with the card saved for the deposit: remember which card, and hold
+      // the deposit straight away if pickup is already within two days.
+      const savedCard = object.setup_future_usage === 'off_session' && typeof object.customer === 'string';
+      const paidWith = typeof object.payment_method === 'string' ? object.payment_method : null;
+      const booking = await bookingWithPayment(db, paymentId);
+      if (savedCard && paidWith && booking) {
+        await rememberCardThatPaid(db, booking.id, paidWith);
+        after.push(() => holdDepositIfDue(booking.id));
+      }
+      return after;
     }
 
     // The card was declined, or the bank's approval was not given. Each failed

@@ -25,6 +25,7 @@ import { createdAt, moment, updatedAt } from './columns.js';
 import {
   bookingStatus,
   collectionMethod,
+  depositAutoHoldStatus,
   depositStatus,
   disputeOpenedBy,
   disputeStatus,
@@ -264,6 +265,20 @@ export const deposits = pgTable(
     // How much of the deposit was actually kept. A claim can be for part of it;
     // whatever is not claimed goes back to the customer.
     claimedAmountCents: integer('claimed_amount_cents'),
+
+    // ---- HOLDING IT AUTOMATICALLY, ON THE CARD THAT PAID ----
+    // When the customer agreed, in so many words, to the card that pays for the
+    // rental also being used for this hold. The evidence of consent for placing
+    // it without them there.
+    holdConsentAt: moment('hold_consent_at'),
+    // The card (Stripe payment method) that paid for the rental and was saved,
+    // with that agreement, for this hold.
+    paymentMethodId: text('payment_method_id'),
+    autoHoldStatus: depositAutoHoldStatus('auto_hold_status'),
+    // When it was last tried, and — if it needs the customer — what they are
+    // told, in a sentence written for them.
+    autoHoldTriedAt: moment('auto_hold_tried_at'),
+    autoHoldProblem: text('auto_hold_problem'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

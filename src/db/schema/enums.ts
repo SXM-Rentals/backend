@@ -61,6 +61,10 @@ export const vehicleBlockReason = pgEnum('vehicle_block_reason', ['servicing', '
 // ---- BOOKINGS AND MONEY ----
 export const bookingStatus = pgEnum('booking_status', ['upcoming', 'active', 'completed', 'cancelled']);
 export const depositStatus = pgEnum('deposit_status', ['not_taken', 'held', 'released', 'claimed']);
+// Holding the deposit automatically on the card that paid: being placed now,
+// placed, or tried and in need of the customer (their bank wants them to approve
+// it, or the card was declined). Never retried on its own once it needs them.
+export const depositAutoHoldStatus = pgEnum('deposit_auto_hold_status', ['placing', 'placed', 'needs_customer']);
 export const paymentStatus = pgEnum('payment_status', ['paid', 'authorized', 'refunded', 'failed']);
 export const collectionMethod = pgEnum('collection_method', ['pickup', 'delivery']);
 export const payoutStatus = pgEnum('payout_status', ['paid', 'pending', 'processing']);
@@ -90,6 +94,8 @@ export const notificationKind = pgEnum('notification_kind', [
   'cancellation',
   'verification',
   'promotion',
+  // The automatic deposit hold could not go through; the customer has to hold it.
+  'deposit_hold_needed',
 ]);
 export const supportInteractionStatus = pgEnum('support_interaction_status', [
   'drafted',

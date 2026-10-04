@@ -36,6 +36,7 @@ const CATEGORY_BY_KIND: Record<NotificationKind, PushCategory> = {
   late_return: 'returnReminders',
   payment: 'deposits',
   promotion: 'offers',
+  deposit_hold_needed: 'deposits',
 };
 
 type Logger = { error: (obj: object, msg: string) => void };
@@ -59,7 +60,8 @@ export type NotificationKind =
   | 'late_return'
   | 'cancellation'
   | 'verification'
-  | 'promotion';
+  | 'promotion'
+  | 'deposit_hold_needed';
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
@@ -276,6 +278,46 @@ export function createNotificationService(deps: NotificationServiceDeps) {
               'It was only ever held on your card, never taken.',
             ],
             note: 'Your bank may take a few days to show it as available again.',
+          },
+        },
+      });
+    },
+
+    // The deposit could not be held automatically on the card that paid: the
+    // bank wants the customer to approve it, or the card was declined. Sent once,
+    // in the app, by email and to the phone, with the way to fix it.
+    async depositHoldNeeded(depositId: string, reason: 'authentication_required' | 'declined') {
+      const [row] = await db
+        .select({ deposit: deposits, booking: bookings, customer: customers })
+        .from(deposits)
+        .innerJoin(bookings, eq(bookings.id, deposits.bookingId))
+        .innerJoin(customers, eq(customers.id, bookings.customerId))
+        .where(eq(deposits.id, depositId))
+        .limit(1);
+      if (!row) return;
+
+      const amount = money(row.deposit.amountCents);
+      const reference = row.booking.reference;
+      const sentence =
+        reason === 'authentication_required'
+          ? `Your bank wants you to approve the ${amount} deposit hold for ${reference}. Open the rental to do it.`
+          : `Your card could not be used for the ${amount} deposit hold for ${reference}. Open the rental to hold it with a card.`;
+      await notify({
+        customerId: row.customer.id,
+        bookingId: row.booking.id,
+        kind: 'deposit_hold_needed',
+        title: 'Your deposit hold needs you',
+        body: sentence,
+        onlyOnce: true,
+        emailTo: {
+          address: row.customer.email,
+          subject: `Please hold the deposit for ${reference}`,
+          content: {
+            preheader: 'One step left before you collect the car.',
+            title: 'Your deposit hold needs you',
+            paragraphs: [`Hi ${row.customer.firstName},`, sentence],
+            button: { label: 'Open my rental', url: `${brand.siteUrl}/account/rentals/${row.booking.id}` },
+            note: 'A deposit is only ever held on your card, never charged, unless a claim is made with a written reason.',
           },
         },
       });

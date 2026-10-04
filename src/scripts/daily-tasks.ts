@@ -27,7 +27,8 @@ import { bookings, customers, fleetImports, providers } from '../db/schema/index
 import { createStripeGateway } from '../lib/stripe.js';
 import { createDisabledPushSender, createExpoPushSender } from '../lib/push.js';
 import { createPushService } from '../services/push/index.js';
-import { createConsoleEmailSender, createUnconfiguredEmailSender } from '../lib/email.js';
+import { createConsoleEmailSender, createResendEmailSender, createUnconfiguredEmailSender } from '../lib/email.js';
+import { placeDueDepositHolds } from '../services/payments/index.js';
 import { advanceBookingStatuses } from '../services/booking-engine/lifecycle.js';
 import { createNotificationService } from '../services/notifications/index.js';
 import { buildPayout } from '../services/payment-splitting/index.js';
@@ -55,7 +56,12 @@ try {
   });
   const notifications = createNotificationService({
     db: connection.db,
-    email: config.isProduction ? createUnconfiguredEmailSender(console) : createConsoleEmailSender(console),
+    // Real email once Resend is set up for this job too, as for the API.
+    email: config.resendApiKey
+      ? createResendEmailSender({ apiKey: config.resendApiKey, from: config.emailFrom, replyTo: config.emailReplyTo, logger: console })
+      : config.isProduction
+        ? createUnconfiguredEmailSender(console)
+        : createConsoleEmailSender(console),
     logger: console,
     brand: { siteUrl: config.appUrl, logoUrl: config.emailLogoUrl },
     // Tomorrow's reminders go to phones too, for those who want them.
@@ -80,7 +86,28 @@ try {
   const expired = await expireUnansweredDateChanges(connection.db);
   console.log(`Date change requests: ${expired} expired unanswered.`);
 
-  // ---- 3: DEPOSIT HOLDS ABOUT TO RUN OUT ----
+  // ---- 3: DEPOSITS DUE TO BE HELD ON THE CARD THAT PAID ----
+  // Two days before pickup, on the card the customer saved for it when paying.
+  // A hold that cannot go through is never retried: the customer is told, once.
+  if (config.stripeSecretKey) {
+    const holds = await placeDueDepositHolds({
+      db: connection.db,
+      gateway: createStripeGateway({
+        secretKey: config.stripeSecretKey,
+        webhookSecret: config.stripeWebhookSecret,
+        currency: config.currency,
+      }),
+      logger: console,
+      notifications,
+    });
+    console.log(
+      `Deposit holds placed automatically: ${holds.held} held, ${holds.needsCustomer} need the customer, ${holds.failed} to try again.`,
+    );
+  } else {
+    console.log('Deposit holds placed automatically: skipped, STRIPE_SECRET_KEY is not set for this job.');
+  }
+
+  // ---- 3b: DEPOSIT HOLDS ABOUT TO RUN OUT ----
   // A card hold lasts about seven days whatever the rental does, so on a longer
   // rental the deposit stops existing while the car is still out. Nothing here
   // renews it — that needs the customer's agreement to keep a card on file — but

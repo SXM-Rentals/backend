@@ -110,8 +110,22 @@ export async function createTestContext(
 export const TEST_SIGNATURE = 'test-signature';
 
 export type FakeGateway = PaymentGateway & {
+  // What the next hold placed without the customer does: goes through, or the
+  // bank wants the customer to approve it, or the card is declined.
+  nextOffSessionHold: 'held' | 'authentication_required' | 'card_declined';
+  // Every hold placed without the customer, by deposit.
+  offSessionHolds: { depositId: string; paymentMethodId: string; stripeCustomerId: string; amountCents: number }[];
   // Every payment it has been asked to create, by id.
-  created: Map<string, { kind: 'rental' | 'deposit' | 'date_change'; amountCents: number; metadata: Record<string, string> }>;
+  created: Map<
+    string,
+    {
+      kind: 'rental' | 'deposit' | 'date_change';
+      amountCents: number;
+      metadata: Record<string, string>;
+      // Set when paying also saves the card on this Stripe customer.
+      savesCardOn?: string;
+    }
+  >;
   captured: { paymentId: string; amountCents: number }[];
   cancelled: string[];
   refunded: { paymentId: string; amountCents?: number }[];
@@ -148,8 +162,13 @@ export function createFakeGateway(): FakeGateway {
     return { id, clientSecret: `${id}_secret`, status: 'requires_payment_method' };
   };
 
+  // The card a finished payment was made with, as Stripe would report it.
+  const cardOf = (paymentId: string) => (statuses.get(paymentId) === 'succeeded' ? `pm_card_for_${paymentId}` : null);
+
   const gateway: FakeGateway = {
     created,
+    nextOffSessionHold: 'held',
+    offSessionHolds: [],
     captured: [],
     cancelled: [],
     refunded: [],
@@ -231,7 +250,39 @@ export function createFakeGateway(): FakeGateway {
     },
 
     async createRentalPayment(input) {
-      return create('rental', input.amountCents, { bookingId: input.bookingId, reference: input.bookingReference });
+      const payment = create('rental', input.amountCents, { bookingId: input.bookingId, reference: input.bookingReference });
+      if (input.saveCardFor) created.get(payment.id)!.savesCardOn = input.saveCardFor.stripeCustomerId;
+      return { ...payment, savesCard: Boolean(input.saveCardFor), paymentMethodId: null };
+    },
+    async saveCardOnPayment(paymentId, stripeCustomerId) {
+      const payment = created.get(paymentId)!;
+      payment.savesCardOn = stripeCustomerId;
+      return { id: paymentId, clientSecret: `${paymentId}_secret`, status: statuses.get(paymentId)!, savesCard: true, paymentMethodId: null };
+    },
+    async holdDepositOffSession(input) {
+      gateway.offSessionHolds.push({
+        depositId: input.depositId,
+        paymentMethodId: input.paymentMethodId,
+        stripeCustomerId: input.stripeCustomerId,
+        amountCents: input.amountCents,
+      });
+      const hold = create('deposit', input.amountCents, {
+        bookingId: input.bookingId,
+        depositId: input.depositId,
+        reference: input.bookingReference,
+        placedBy: 'automatic',
+      });
+      if (gateway.nextOffSessionHold === 'held') {
+        statuses.set(hold.id, 'requires_capture');
+        return { outcome: 'held', paymentId: hold.id };
+      }
+      const code = gateway.nextOffSessionHold;
+      return {
+        outcome: 'needs_customer',
+        reason: code === 'authentication_required' ? 'authentication_required' : 'declined',
+        paymentId: hold.id,
+        code,
+      };
     },
     async createDateChangePayment(input) {
       return create('date_change', input.amountCents, {
@@ -250,7 +301,13 @@ export function createFakeGateway(): FakeGateway {
     async getPayment(paymentId) {
       const payment = created.get(paymentId);
       if (!payment) return null;
-      return { id: paymentId, clientSecret: `${paymentId}_secret`, status: statuses.get(paymentId) ?? 'unknown' };
+      return {
+        id: paymentId,
+        clientSecret: `${paymentId}_secret`,
+        status: statuses.get(paymentId) ?? 'unknown',
+        savesCard: Boolean(payment.savesCardOn),
+        paymentMethodId: cardOf(paymentId),
+      };
     },
     async captureDepositHold(paymentId, amountCents) {
       gateway.captured.push({ paymentId, amountCents });
@@ -322,6 +379,10 @@ export function createFakeGateway(): FakeGateway {
             id: paymentId,
             amount: payment?.amountCents ?? 0,
             metadata: payment?.metadata ?? {},
+            // A payment that saves the card says so, and which card paid.
+            ...(payment?.savesCardOn
+              ? { customer: payment.savesCardOn, setup_future_usage: 'off_session', payment_method: `pm_card_for_${paymentId}` }
+              : {}),
             ...overrides,
           },
         },

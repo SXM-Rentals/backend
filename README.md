@@ -204,9 +204,9 @@ Everything lives under `/api/v1`.
 | POST | `/bookings/:id/date-changes/quote` | What new dates would cost or give back, before asking |
 | POST | `/bookings/:id/date-changes` · `/:requestId/withdraw` | Ask the business for new dates · take the request back |
 | POST | `/payments/bookings/:id/date-changes/:requestId/intent` | Pay the difference once longer dates are accepted |
-| POST | `/payments/bookings/:id/intent` | Start (or resume) paying for a booking |
+| POST | `/payments/bookings/:id/intent` | Start (or resume) paying for a booking; with `saveCardForDeposit: true`, the card is also saved for the deposit hold |
 | GET · POST · DELETE | `/payments/methods…` | Saved cards: list, save one (a setup secret), forget one, make one the default |
-| POST | `/deposits/bookings/:id/authorize` | Place the deposit hold on the card |
+| POST | `/deposits/bookings/:id/authorize` | Place the deposit hold on the card yourself — needed only when it could not be held automatically |
 | GET | `/deposits/bookings/:id` | What is being held, and its state |
 | POST | `/deposits/:id/release` | Give a deposit back — **staff only** |
 | POST | `/deposits/:id/claim` | Keep part of one — **staff only** |
@@ -492,6 +492,14 @@ payments at Stripe, on purpose:
 | Whose money | Split between the business and SXM Rentals | The customer's, throughout |
 | Where it lives | On the booking, in the ledger | Its own `deposits` row, its own life cycle |
 | Ending | Paid, or refunded | Released in full, or part kept after a written claim |
+
+**Held automatically, on the card that paid.** When the customer agrees at
+payment (`saveCardForDeposit`), the card is saved and the deposit is held on it
+by itself two days before pickup — by the twice-daily job, or straight after
+paying when pickup is sooner. Not at booking: a hold lasts about a week. When
+the bank wants the customer to approve it, or the card is declined, it is never
+retried: the customer is told once (app, email, push) and holds it with the
+button. Either way it is still only a hold, its own separate payment.
 
 Keeping any part of a deposit needs a written reason, is never more than was
 held, and is a staff decision — never a customer's or a business's. The database
