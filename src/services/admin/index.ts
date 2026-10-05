@@ -19,7 +19,7 @@
 
 import { requireTier } from './tiers.js';
 import { markPayoutPaid as markPaidByBank, sendPayout as sendStripePayout } from '../payment-splitting/index.js';
-import { and, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adminStaff,
@@ -65,6 +65,10 @@ export type AdminServiceDeps = {
   db: Database;
   gateway: PaymentGateway;
   payments: PaymentService;
+  // To tell a renter their rental was cancelled, and the business's own booking
+  // system. Optional: a cancellation never fails because a message did not go.
+  notifications?: { bookingCancelled(bookingId: string): Promise<void> } | undefined;
+  integrations?: { bookingChanged(providerId: string, bookingId: string, type: 'booking.cancelled'): void } | undefined;
 };
 
 // How long something has been waiting, in the words the queue screen uses.
@@ -543,13 +547,58 @@ export function createAdminService(deps: AdminServiceDeps) {
     //
     // THE AUDIT ENTRY IS THE POINT. A business closing itself leaves no staff
     // record at all; a closure by staff has to leave one, with a reason.
-    async closeProvider(actor: AdminActor, id: string, input: { reason: string }) {
+    // override: Owner and above only. Cancels every rental not yet started, each
+    // with a full refund and its deposit hold released, then closes — and a
+    // payout still owed no longer stops it (it is sent afterwards). It still
+    // refuses while a car is out with a renter, or a deposit is held on a
+    // finished rental, and checks both BEFORE cancelling anything, so a refusal
+    // never leaves the business half-closed.
+    async closeProvider(actor: AdminActor, id: string, input: { reason: string; override?: boolean | undefined }) {
       const provider = await loadProvider(id);
-      // Its own refusals come through untouched — already_closed, has_live_rental,
-      // has_held_deposit, payout_pending — because the panel shows the server's
-      // sentence to the staff member word for word. 'staff' only changes who
-      // those sentences address.
-      await closeBusiness(db, provider.id, 'staff');
+      if (input.override) {
+        requireTier(actor, 'owner');
+        if (provider.deletedAt) throw conflict('already_closed', 'This business is already closed.');
+        const [underWay] = await db
+          .select({ reference: bookings.reference })
+          .from(bookings)
+          .where(and(eq(bookings.providerId, provider.id), eq(bookings.status, 'active')))
+          .limit(1);
+        if (underWay) {
+          throw conflict(
+            'has_live_rental',
+            `A rental is under way (${underWay.reference}): a car is out with a renter. Cancel that rental first if you mean to, then close the business. Nothing was changed.`,
+          );
+        }
+        const [heldOnFinished] = await db
+          .select({ reference: bookings.reference })
+          .from(deposits)
+          .innerJoin(bookings, eq(bookings.id, deposits.bookingId))
+          .where(and(eq(bookings.providerId, provider.id), eq(deposits.status, 'held'), ne(bookings.status, 'upcoming')))
+          .limit(1);
+        if (heldOnFinished) {
+          throw conflict(
+            'has_held_deposit',
+            `A deposit is still held for a finished rental (${heldOnFinished.reference}). Release or claim it first. Nothing was changed.`,
+          );
+        }
+        const upcoming = await db
+          .select({ id: bookings.id })
+          .from(bookings)
+          .where(and(eq(bookings.providerId, provider.id), eq(bookings.status, 'upcoming')));
+        for (const booking of upcoming) {
+          await this.cancelBooking(actor, booking.id, {
+            reason: `The business was closed by SXM Rentals: ${input.reason}`,
+            refund: 'full',
+          });
+        }
+        await closeBusiness(db, provider.id, 'staff', { allowPendingPayouts: true });
+      } else {
+        // Its own refusals come through untouched — already_closed, has_live_rental,
+        // has_held_deposit, payout_pending — because the panel shows the server's
+        // sentence to the staff member word for word. 'staff' only changes who
+        // those sentences address.
+        await closeBusiness(db, provider.id, 'staff');
+      }
 
       await recordAudit(db, {
         staffId: actor.staffId,
@@ -1002,6 +1051,69 @@ export function createAdminService(deps: AdminServiceDeps) {
         after: input.approve ? 'approved' : 'denied',
         reason: input.reason,
       });
+    },
+
+    // ---- CANCELLING A RENTAL, AS STAFF ----
+    // For when SXM Rentals has to step in: a business closing, a car that cannot
+    // be rented, a booking that should never have been made. Owner and above,
+    // with the authenticator code (checked by the route) and a reason.
+    //   refund "full"  everything the renter paid comes back, at once, through
+    //                  the same path as an approved refund (so it is audited too)
+    //   refund "none"  nothing comes back — fraud, say
+    // Any deposit hold is released either way: it was never the platform's money.
+    async cancelBooking(actor: AdminActor, id: string, input: { reason: string; refund: 'full' | 'none' }) {
+      requireTier(actor, 'owner');
+      const [booking] = await db.select().from(bookings).where(eq(bookings.id, requireId(id, 'booking'))).limit(1);
+      if (!booking) throw notFound('We could not find that booking.');
+      if (booking.status !== 'upcoming' && booking.status !== 'active') {
+        throw conflict('not_cancellable', `That rental is already ${booking.status}, so there is nothing to cancel.`);
+      }
+
+      const [cancelled] = await db
+        .update(bookings)
+        .set({ status: 'cancelled', cancelledAt: new Date(), cancelledBy: 'staff' })
+        .where(and(eq(bookings.id, booking.id), inArray(bookings.status, ['upcoming', 'active'])))
+        .returning();
+      if (!cancelled) throw conflict('not_cancellable', 'That rental changed a moment ago. Look at it again.');
+
+      // The deposit hold, let go.
+      const [deposit] = await db.select().from(deposits).where(eq(deposits.bookingId, booking.id)).limit(1);
+      if (deposit?.status === 'held') {
+        if (deposit.stripePaymentIntentId) await gateway.cancelDepositHold(deposit.stripePaymentIntentId);
+        await db.update(deposits).set({ status: 'released', releasedAt: new Date() }).where(eq(deposits.id, deposit.id));
+      }
+
+      await recordAudit(db, {
+        staffId: actor.staffId,
+        action: 'booking_cancelled',
+        subjectType: 'booking',
+        subjectId: booking.id,
+        subjectLabel: `Booking · ${booking.reference}`,
+        field: 'Status',
+        before: booking.status,
+        after: input.refund === 'full' ? 'Cancelled by staff · full refund' : 'Cancelled by staff · no refund',
+        reason: input.reason,
+      });
+
+      // Everything paid that has not already been given back.
+      if (input.refund === 'full' && booking.paymentStatus === 'paid') {
+        const [given] = await db
+          .select({ total: sql<number>`coalesce(sum(${refundRequests.amountCents}), 0)::int` })
+          .from(refundRequests)
+          .where(and(eq(refundRequests.bookingId, booking.id), eq(refundRequests.status, 'approved')));
+        const owed = booking.totalDueTodayCents - (given?.total ?? 0);
+        if (owed > 0) {
+          const [request] = await db
+            .insert(refundRequests)
+            .values({ bookingId: booking.id, amountCents: owed, reasonGiven: `Cancelled by SXM Rentals: ${input.reason}` })
+            .returning({ id: refundRequests.id });
+          await this.decideRefund(actor, request!.id, { approve: true, reason: input.reason });
+        }
+      }
+
+      await deps.notifications?.bookingCancelled(booking.id).catch(() => undefined);
+      deps.integrations?.bookingChanged(booking.providerId, booking.id, 'booking.cancelled');
+      return this.getBooking(booking.id);
     },
 
     // ================= DISPUTES =================

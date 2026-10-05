@@ -122,6 +122,8 @@ const staffResetBody = z.object({
   code,
 });
 const reasonAndCodeBody = z.object({ reason, code });
+const closeProviderBody = reasonAndCodeBody.extend({ override: z.boolean().optional() });
+const staffCancelBody = z.object({ reason, code, refund: z.enum(['full', 'none']) });
 // The bank's own reference for a transfer sent outside Stripe.
 const markPaidBody = z.object({ reason, code, bankReference: z.string().trim().min(3).max(80) });
 // Correcting a business, one field at a time. A discriminated union rather than
@@ -483,10 +485,12 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   // Closing a business, and opening it again. Both ask for the staff member's
   // authenticator code as well as a reason: this delists a whole fleet and takes
   // a business page down, so a session left open is not enough on its own.
+  // override (Owner and above): cancel its upcoming rentals with full refunds
+  // and close anyway. See closeProvider.
   app.post('/providers/:id/close', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
     const actor = staff(request);
     const { id } = parseInput(idParam, request.params);
-    const body = parseInput(reasonAndCodeBody, request.body);
+    const body = parseInput(closeProviderBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
     return admin.closeProvider(actor, id, body);
   });
@@ -557,6 +561,15 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   app.get('/bookings/:id', async (request) => {
     staff(request);
     return admin.getBooking(parseInput(idParam, request.params).id);
+  });
+
+  // Cancelling a rental as SXM Rentals. Owner and above, a reason and the code.
+  app.post('/bookings/:id/cancel', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(staffCancelBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return admin.cancelBooking(actor, id, body);
   });
 
   app.get('/bookings/:id/agreement', async (request) => {

@@ -254,7 +254,8 @@ Everything lives under `/api/v1`.
 | GET | `/admin/bookings/:id/agreement` | The signed agreement on a booking, drawing included, for a disputed deposit |
 | GET · POST | `/admin/fleet-requests…` | Businesses asking us to set their fleet up · download a file · mark done |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
-| POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code |
+| POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code. With `override` (Owner and above), its upcoming rentals are cancelled and refunded in full first |
+| POST | `/admin/bookings/:id/cancel` | Cancel a rental as SXM Rentals, with a full refund or none — Owner and above, reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
 | PATCH | `/admin/providers/:id` | Correct one of its details, with a reason |
 | GET | `/admin/bookings` · `/admin/payments` · `/admin/payouts` | Read-only views across the platform |

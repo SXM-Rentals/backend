@@ -216,7 +216,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
 
   // Identity checks: Stripe Identity or staff, as the owner chooses.
   const verification = createVerificationService({ db, config, gateway, notifications, logger: app.log });
-  const admin = createAdminService({ db, gateway, payments });
+  const admin = createAdminService({ db, gateway, payments, notifications, integrations });
   // Staff accounts, managed from the panel. It borrows the sign-in service's
   // lockout counters and session-ending, so there is one of each.
   const staffAccounts = createAdminStaffService({ db, auth: adminAuth, breachedPasswords });

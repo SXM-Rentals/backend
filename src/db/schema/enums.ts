@@ -140,6 +140,8 @@ export const auditAction = pgEnum('audit_action', [
   // A business's share sent through Stripe, or recorded as paid by bank transfer.
   'payout_sent',
   'payout_marked_paid',
+  // A rental cancelled by staff, not by the renter.
+  'booking_cancelled',
 ]);
 // ---- WHAT A MEMBER OF STAFF IS ALLOWED TO DO ----
 // Highest first. The order here is the hierarchy, and code compares positions in

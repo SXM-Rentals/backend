@@ -899,6 +899,9 @@ export async function closeBusiness(
   // Who will read the refusal. Staff are not the business, so "a payment to you
   // is still on its way" is wrong when the panel shows it to a staff member.
   audience: 'owner' | 'staff' = 'owner',
+  // Staff overriding: a payout still owed is sent after closing, from the
+  // admin panel, so it does not stop the business closing.
+  options: { allowPendingPayouts?: boolean } = {},
 ) {
   const them = audience === 'staff' ? 'them' : 'you';
   const [provider] = await db
@@ -941,7 +944,7 @@ export async function closeBusiness(
     .from(payouts)
     .where(and(eq(payouts.providerId, providerId), inArray(payouts.status, ['pending', 'processing'])))
     .limit(1);
-  if (pendingPayout) {
+  if (pendingPayout && !options.allowPendingPayouts) {
     throw conflict(
       'payout_pending',
       `A payment to ${them} is still on its way (${pendingPayout.reference}). The business can be closed once it has arrived.`,

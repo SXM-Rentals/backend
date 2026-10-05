@@ -48,7 +48,9 @@ export type AuditAction =
   | 'staff_tier_changed'
   // A business's share sent through Stripe, or recorded as paid by bank transfer.
   | 'payout_sent'
-  | 'payout_marked_paid';
+  | 'payout_marked_paid'
+  // A rental cancelled by staff, not by the renter.
+  | 'booking_cancelled';
 
 export type AuditSubjectType =
   | 'customer'
