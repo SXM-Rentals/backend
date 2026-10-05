@@ -22,9 +22,9 @@
 // Only bookings that are COMPLETED and PAID are included: money is sent after
 // the rental has happened and the customer's payment actually arrived.
 
-import { and, asc, eq, gte, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, lte, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { bookings, payouts, providerPayoutAccounts } from '../../db/schema/index.js';
+import { bookings, ledgerEntries, payouts, providerPayoutAccounts } from '../../db/schema/index.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import { conflict, notFound } from '../../lib/errors.js';
 
@@ -125,6 +125,9 @@ export async function sendPayout(db: Database, gateway: PaymentGateway, payoutId
     .from(providerPayoutAccounts)
     .where(eq(providerPayoutAccounts.providerId, payout.providerId))
     .limit(1);
+  if (account?.method === 'bank_transfer') {
+    throw conflict('paid_by_bank_transfer', 'This business is paid by bank transfer. Record the transfer once it has been sent.');
+  }
   if (!account?.stripeAccountId || !account.payoutsEnabled) {
     throw conflict(
       'payouts_not_enabled',
@@ -143,4 +146,39 @@ export async function sendPayout(db: Database, gateway: PaymentGateway, payoutId
     .update(payouts)
     .set({ status: 'paid', paidOn: new Date(), stripeTransferId: transfer.id })
     .where(eq(payouts.id, payout.id));
+  // On the books as money leaving SXM Rentals.
+  await db.insert(ledgerEntries).values({
+    kind: 'payout',
+    amountCents: payout.amountCents,
+    status: 'succeeded',
+    stripeRef: transfer.id,
+    occurredAt: new Date(),
+  });
+}
+
+// ---- PAID BY BANK TRANSFER ----
+// For a business Stripe cannot pay (a bank on the Dutch side). The money is sent
+// from SXM Rentals' own bank; this records that it went, with the bank's own
+// reference, so the business sees it as paid and it is never paid twice.
+export async function markPayoutPaid(
+  db: Database,
+  payoutId: string,
+  input: { bankReference: string; staffId: string },
+): Promise<typeof payouts.$inferSelect> {
+  const [payout] = await db.select().from(payouts).where(eq(payouts.id, payoutId)).limit(1);
+  if (!payout) throw notFound('We could not find that payout.');
+  const [paid] = await db
+    .update(payouts)
+    .set({ status: 'paid', paidOn: new Date(), bankReference: input.bankReference, paidByStaffId: input.staffId })
+    .where(and(eq(payouts.id, payout.id), ne(payouts.status, 'paid')))
+    .returning();
+  if (!paid) throw conflict('already_paid', 'That payout has already been paid.');
+  await db.insert(ledgerEntries).values({
+    kind: 'payout',
+    amountCents: payout.amountCents,
+    status: 'succeeded',
+    stripeRef: `bank:${input.bankReference}`,
+    occurredAt: new Date(),
+  });
+  return paid;
 }

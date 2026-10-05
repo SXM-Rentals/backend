@@ -28,6 +28,7 @@ import {
 import { createdAt, moment, updatedAt } from './columns.js';
 import {
   fleetRequestStatus,
+  payoutMethod,
   islandSide,
   operatingSide,
   payoutAccountStatus,
@@ -196,7 +197,10 @@ export const providerPayoutAccounts = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     payoutsEnabled: boolean('payouts_enabled').notNull().default(false),
+    // Where the business's bank account is: US, FR (the French side counts as
+    // France for Stripe) or SX (the Dutch side, paid by bank transfer).
     country: text('country').notNull().default('SX'),
+    method: payoutMethod('method').notNull().default('stripe'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

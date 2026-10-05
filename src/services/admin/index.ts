@@ -17,6 +17,8 @@
 //     paid + what SXM Rentals keeps. Deposits held are reported separately and
 //     never added into any of those three.
 
+import { requireTier } from './tiers.js';
+import { markPayoutPaid as markPaidByBank, sendPayout as sendStripePayout } from '../payment-splitting/index.js';
 import { and, desc, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -29,6 +31,7 @@ import {
   payouts,
   providerBusinessProfiles,
   providers,
+  providerPayoutAccounts,
   bookingSignatures,
   fleetRequests,
   refundRequests,
@@ -1116,9 +1119,10 @@ export function createAdminService(deps: AdminServiceDeps) {
 
     async listPayouts(query: { limit?: number | undefined }) {
       const rows = await db
-        .select({ payout: payouts, providerName: providers.businessName })
+        .select({ payout: payouts, providerName: providers.businessName, method: providerPayoutAccounts.method })
         .from(payouts)
         .innerJoin(providers, eq(providers.id, payouts.providerId))
+        .leftJoin(providerPayoutAccounts, eq(providerPayoutAccounts.providerId, payouts.providerId))
         .orderBy(desc(payouts.periodEnd))
         .limit(Math.min(query.limit ?? 100, PAGE_LIMIT));
 
@@ -1134,7 +1138,60 @@ export function createAdminService(deps: AdminServiceDeps) {
         periodEnd: row.payout.periodEnd,
         status: row.payout.status,
         ...(row.payout.paidOn ? { paidOn: row.payout.paidOn.toISOString().slice(0, 10) } : {}),
+        // How it is paid: "send" it through Stripe, or record a bank transfer.
+        method: row.method ?? 'stripe',
+        bankReference: row.payout.bankReference,
       }));
+    },
+
+    // ---- PAYING A BUSINESS ITS SHARE ----
+    // Real money leaving SXM Rentals, so Owner access and the authenticator
+    // code, and always on the audit log.
+    async sendPayout(actor: AdminActor, id: string, input: { reason: string }) {
+      requireTier(actor, 'owner');
+      const payout = await this.loadPayout(id);
+      await sendStripePayout(db, gateway, payout.id);
+      await recordAudit(db, {
+        staffId: actor.staffId,
+        action: 'payout_sent',
+        subjectType: 'payment',
+        subjectId: payout.id,
+        subjectLabel: `Payout · ${payout.reference}`,
+        field: 'Status',
+        before: payout.status,
+        after: 'paid',
+        reason: input.reason,
+      });
+      return this.payoutView(payout.id);
+    },
+
+    async markPayoutPaid(actor: AdminActor, id: string, input: { reason: string; bankReference: string }) {
+      requireTier(actor, 'owner');
+      const payout = await this.loadPayout(id);
+      await markPaidByBank(db, payout.id, { bankReference: input.bankReference, staffId: actor.staffId });
+      await recordAudit(db, {
+        staffId: actor.staffId,
+        action: 'payout_marked_paid',
+        subjectType: 'payment',
+        subjectId: payout.id,
+        subjectLabel: `Payout · ${payout.reference}`,
+        field: 'Status',
+        before: payout.status,
+        after: `paid by bank transfer (${input.bankReference})`,
+        reason: input.reason,
+      });
+      return this.payoutView(payout.id);
+    },
+
+    async loadPayout(id: string) {
+      const [payout] = await db.select().from(payouts).where(eq(payouts.id, requireId(id, 'payout'))).limit(1);
+      if (!payout) throw notFound('We could not find that payout.');
+      return payout;
+    },
+
+    async payoutView(id: string) {
+      const all = await this.listPayouts({ limit: PAGE_LIMIT });
+      return all.find((payout) => payout.id === id)!;
     },
 
     // ================= ANALYTICS =================

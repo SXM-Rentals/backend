@@ -244,7 +244,7 @@ Everything lives under `/api/v1`.
 | POST | `/providers/me/fleet-requests` · `/:id/files` | "Send it to us": ask staff to set the fleet up · send a file with it (kept private) |
 | GET · POST · PUT | `/providers/me/integration…` | Connect the business's own booking system: status, a new API key, the bookings webhook, disconnect |
 | GET | `/providers/me/payouts` | What SXM Rentals has paid them |
-| GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going |
+| GET · POST | `/providers/me/payout-account` | Where the money goes, and how setup is going. Takes `bankCountry`: `US` or `FR` (Stripe), or `SX` (Dutch side, paid by bank transfer — Stripe cannot pay Sint Maarten) |
 | POST | `/admin/auth/login` · `/mfa/enroll` · `/mfa/verify` · `/logout` | Staff sign-in, in two steps |
 | GET | `/admin/summary` · `/admin/queue` · `/admin/audit` | The dashboard, what is waiting, who changed what |
 | GET | `/admin/analytics` | Money, bookings and sign-ups over time (`?months=` or `?from=&to=`) |
@@ -258,6 +258,7 @@ Everything lives under `/api/v1`.
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
 | PATCH | `/admin/providers/:id` | Correct one of its details, with a reason |
 | GET | `/admin/bookings` · `/admin/payments` · `/admin/payouts` | Read-only views across the platform |
+| POST | `/admin/payouts/:id/send` · `/mark-paid` | Send a business its share through Stripe, or record a bank transfer — Owner and above, reason and authenticator code |
 | GET · POST | `/admin/deposits…` | Release a deposit, or keep part of it with a written reason |
 | GET · POST | `/admin/refunds…` `/admin/disputes…` | Decide refunds; assign and resolve disputes |
 

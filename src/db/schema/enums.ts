@@ -37,6 +37,10 @@ export const islandSide = pgEnum('island_side', ['dutch', 'french']);
 export const operatingSide = pgEnum('operating_side', ['dutch', 'french', 'both']);
 export const providerMemberRole = pgEnum('provider_member_role', ['owner', 'staff']);
 export const registrationStatus = pgEnum('registration_status', ['registered', 'not_registered', 'pending']);
+// How a business is paid its share: through Stripe, to an account it set up
+// there; or by bank transfer from SXM Rentals, for banks Stripe cannot reach
+// (Stripe does not pay out to Sint Maarten).
+export const payoutMethod = pgEnum('payout_method', ['stripe', 'bank_transfer']);
 export const payoutAccountStatus = pgEnum('payout_account_status', [
   'not_started',
   'pending',
@@ -131,6 +135,9 @@ export const auditAction = pgEnum('audit_action', [
   'business_updated',
   // What a member of staff is allowed to do, changed by somebody senior to them.
   'staff_tier_changed',
+  // A business's share sent through Stripe, or recorded as paid by bank transfer.
+  'payout_sent',
+  'payout_marked_paid',
 ]);
 // ---- WHAT A MEMBER OF STAFF IS ALLOWED TO DO ----
 // Highest first. The order here is the hierarchy, and code compares positions in

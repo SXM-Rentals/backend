@@ -45,7 +45,10 @@ export type AuditAction =
   | 'business_reopened'
   | 'business_updated'
   // What a member of staff is allowed to do, changed by somebody senior to them.
-  | 'staff_tier_changed';
+  | 'staff_tier_changed'
+  // A business's share sent through Stripe, or recorded as paid by bank transfer.
+  | 'payout_sent'
+  | 'payout_marked_paid';
 
 export type AuditSubjectType =
   | 'customer'

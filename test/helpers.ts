@@ -131,7 +131,7 @@ export type FakeGateway = PaymentGateway & {
   cancelled: string[];
   refunded: { paymentId: string; amountCents?: number }[];
   // The businesses' own Stripe accounts, and the money sent to them.
-  accounts: Map<string, { providerId: string; payoutsEnabled: boolean; outstanding: string[] }>;
+  accounts: Map<string, { providerId: string; payoutsEnabled: boolean; outstanding: string[]; country?: string }>;
   transfers: { accountId: string; amountCents: number; reference: string }[];
   // Stripe customers and the cards saved on them.
   stripeCustomers: Map<string, { customerId: string; cards: SavedCard[]; deleted: boolean }>;
@@ -325,7 +325,7 @@ export function createFakeGateway(): FakeGateway {
     async createConnectedAccount(input) {
       counter += 1;
       const id = `acct_${counter}`;
-      gateway.accounts.set(id, { providerId: input.providerId, payoutsEnabled: false, outstanding: ['bank_account'] });
+      gateway.accounts.set(id, { providerId: input.providerId, payoutsEnabled: false, outstanding: ['bank_account'], country: input.country });
       return { id };
     },
     async createAccountOnboardingLink(input) {

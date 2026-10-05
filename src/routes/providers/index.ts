@@ -120,7 +120,12 @@ const listQuery = z.object({
 const idParam = z.object({ id: z.string().max(64) });
 const photoParams = z.object({ id: z.string().max(64), photoId: z.string().max(64) });
 const closeBody = z.object({ password: z.string().min(1).max(PASSWORD_MAX_LENGTH) });
-const payoutStartBody = z.object({ returnTo: z.enum(['app', 'web']).optional() });
+const payoutStartBody = z.object({
+  returnTo: z.enum(['app', 'web']).optional(),
+  // Where the business's bank account is: US, FR (the French side) or SX (the
+  // Dutch side, paid by bank transfer). The French side may leave it out.
+  bankCountry: z.enum(['US', 'FR', 'SX']).optional(),
+});
 const dateChangeParams = z.object({ id: z.string().max(64), requestId: z.string().max(64) });
 // The business's own words, shown to the renter as written.
 const declineBody = z.object({ note: z.string().trim().max(500).optional() });
@@ -643,12 +648,12 @@ export default async function providerRoutes(app: FastifyInstance, options: Prov
 
   app.post('/me/payout-account', async (request) => {
     const { providerId } = await businessFor(request);
-    const { returnTo } = parseInput(payoutStartBody, request.body ?? {});
+    const { returnTo, bankCountry } = parseInput(payoutStartBody, request.body ?? {});
     // From the phone app: Stripe sends them to the redirect below, which hands
     // over to the app, and the in-app browser closes itself when it sees that.
     const returnUrl =
       returnTo === 'app' ? `${request.protocol}://${request.host}/api/v1/providers/payout-return` : undefined;
-    return startPayoutOnboarding(db, gateway, config, providerId, returnUrl);
+    return startPayoutOnboarding(db, gateway, config, providerId, returnUrl, bankCountry);
   });
 
   // Where Stripe sends a business that set up payouts from the phone app. Stripe

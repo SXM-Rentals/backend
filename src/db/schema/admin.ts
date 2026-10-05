@@ -146,6 +146,9 @@ export const platformSettings = pgTable(
     payoutEntity: payoutEntity('payout_entity').notNull().default('us_llc'),
     featureFlags: jsonb('feature_flags').notNull().default(sql`'[]'::jsonb`),
     rewardsConfig: jsonb('rewards_config').notNull().default(sql`'{}'::jsonb`),
+    // Which Stripe mode the server's keys were last in. Switching from test to
+    // live forgets test-mode records; see services/payments/stripe-mode.ts.
+    stripeMode: text('stripe_mode'),
     updatedAt: updatedAt(),
   },
   (t) => [

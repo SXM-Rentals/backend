@@ -29,6 +29,7 @@ import { createDisabledPushSender, createExpoPushSender } from '../lib/push.js';
 import { createPushService } from '../services/push/index.js';
 import { createConsoleEmailSender, createResendEmailSender, createUnconfiguredEmailSender } from '../lib/email.js';
 import { placeDueDepositHolds } from '../services/payments/index.js';
+import { recordedStripeMode, stripeKeyMode } from '../services/payments/stripe-mode.js';
 import { advanceBookingStatuses } from '../services/booking-engine/lifecycle.js';
 import { createNotificationService } from '../services/notifications/index.js';
 import { buildPayout } from '../services/payment-splitting/index.js';
@@ -89,7 +90,18 @@ try {
   // ---- 3: DEPOSITS DUE TO BE HELD ON THE CARD THAT PAID ----
   // Two days before pickup, on the card the customer saved for it when paying.
   // A hold that cannot go through is never retried: the customer is told, once.
-  if (config.stripeSecretKey) {
+  // Keys here in a different Stripe mode from the server's would hold deposits
+  // on cards the other mode has never heard of. Skipped, loudly, until they match.
+  const stripeModeMatches = config.stripeSecretKey
+    ? (await recordedStripeMode(connection.db)) === stripeKeyMode(config.stripeSecretKey)
+    : false;
+  if (config.stripeSecretKey && !stripeModeMatches) {
+    console.warn(
+      'Stripe: this job has ' + stripeKeyMode(config.stripeSecretKey) + ' keys but the server is in another mode. ' +
+        'Update STRIPE_SECRET_KEY in the GitHub secrets to match Render. Deposit holds skipped.',
+    );
+  }
+  if (config.stripeSecretKey && stripeModeMatches) {
     const holds = await placeDueDepositHolds({
       db: connection.db,
       gateway: createStripeGateway({

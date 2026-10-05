@@ -277,7 +277,8 @@ describe('being paid', () => {
   });
 
   it('sets up the Stripe account, and pays out once Stripe says it can', async () => {
-    const start = await post('/providers/me/payout-account', {}, auth(owner));
+    // A Dutch-side business says where its bank is; this one banks in the US.
+    const start = await post('/providers/me/payout-account', { bankCountry: 'US' }, auth(owner));
     expect(start.statusCode).toBe(200);
     expect(start.json().url).toContain('https://');
 

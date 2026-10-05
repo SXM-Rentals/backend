@@ -786,6 +786,10 @@ export async function startPayoutOnboarding(
   // for the phone app, an https address on this API that hands over to the app
   // (Stripe will not send somebody to an app's own address directly).
   returnUrl?: string,
+  // Where the business's bank account is. Stripe pays US and French-side banks
+  // (the French side counts as France); it cannot pay Sint Maarten, so a
+  // Dutch-side bank is paid by bank transfer from SXM Rentals instead.
+  bankCountry?: 'US' | 'FR' | 'SX',
 ) {
   const [row] = await db
     .select({ account: providerPayoutAccounts, provider: providers, profile: providerBusinessProfiles })
@@ -798,22 +802,43 @@ export async function startPayoutOnboarding(
 
   let accountId = row.account.stripeAccountId;
   if (!accountId) {
+    // A French-side business banks in France unless it says otherwise. Anybody
+    // else has to say: a Dutch-side business may bank in the US or locally.
+    const country = bankCountry ?? (row.provider.side === 'french' ? 'FR' : undefined);
+    if (!country) {
+      throw badRequest(
+        'bank_country_needed',
+        'Tell us where your bank account is: in the United States, in France (the French side), or on the Dutch side.',
+      );
+    }
+    if (country === 'SX') {
+      await db
+        .update(providerPayoutAccounts)
+        .set({ country: 'SX', method: 'bank_transfer', status: 'pending' })
+        .where(eq(providerPayoutAccounts.providerId, providerId));
+      return {
+        url: null,
+        method: 'bank_transfer' as const,
+        message:
+          'Businesses banking on the Dutch side are paid by bank transfer from SXM Rentals. Our team will contact you for your bank details.',
+      };
+    }
     const created = await gateway.createConnectedAccount({
       providerId,
       businessName: row.provider.businessName,
       email: row.profile.contactEmail,
-      country: row.account.country,
+      country,
     });
     accountId = created.id;
     await db
       .update(providerPayoutAccounts)
-      .set({ stripeAccountId: accountId, status: 'pending' })
+      .set({ stripeAccountId: accountId, status: 'pending', country, method: 'stripe' })
       .where(eq(providerPayoutAccounts.providerId, providerId));
   }
 
   const back = returnUrl ?? `${config.appUrl}/provider/payouts`;
   const link = await gateway.createAccountOnboardingLink({ accountId, returnUrl: back, refreshUrl: back });
-  return { url: link.url };
+  return { url: link.url, method: 'stripe' as const, message: null };
 }
 
 export async function getPayoutAccount(db: Database, gateway: PaymentGateway, providerId: string) {
@@ -834,7 +859,13 @@ export async function getPayoutAccount(db: Database, gateway: PaymentGateway, pr
         .update(providerPayoutAccounts)
         .set({ payoutsEnabled: live.payoutsEnabled, outstanding: live.outstanding, status })
         .where(eq(providerPayoutAccounts.providerId, providerId));
-      return { status, payoutsEnabled: live.payoutsEnabled, outstanding: live.outstanding, country: account.country };
+      return {
+        status,
+        payoutsEnabled: live.payoutsEnabled,
+        outstanding: live.outstanding,
+        country: account.country,
+        method: account.method,
+      };
     }
   }
 
@@ -843,6 +874,8 @@ export async function getPayoutAccount(db: Database, gateway: PaymentGateway, pr
     payoutsEnabled: account.payoutsEnabled,
     outstanding: account.outstanding,
     country: account.country,
+    // "stripe", or "bank_transfer" for a bank Stripe cannot pay (Dutch side).
+    method: account.method,
   };
 }
 

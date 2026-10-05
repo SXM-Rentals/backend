@@ -12,6 +12,7 @@
 import { buildApp } from './app.js';
 import { loadConfig, type Config } from './config.js';
 import { connectDatabase } from './db/client.js';
+import { settleStripeMode } from './services/payments/stripe-mode.js';
 
 // ---- SETTINGS ----
 // A bad setting stops everything here with a readable list, not a stack trace.
@@ -26,6 +27,13 @@ try {
 // ---- DATABASE AND API ----
 const connection = await connectDatabase(config.databaseUrl);
 const app = await buildApp({ config, db: connection.db });
+
+// ---- STRIPE: TEST TO LIVE ----
+// The first start with live keys lets go of test-mode records, which live mode
+// has never heard of. Never the other way. See services/payments/stripe-mode.ts.
+if (config.stripeSecretKey) {
+  await settleStripeMode(connection.db, config.stripeSecretKey, app.log);
+}
 
 if (connection.kind === 'pglite') {
   app.log.info('Using the built-in local database in .data/ (set DATABASE_URL to use a Neon branch).');

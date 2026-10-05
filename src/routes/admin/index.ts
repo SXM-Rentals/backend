@@ -122,6 +122,8 @@ const staffResetBody = z.object({
   code,
 });
 const reasonAndCodeBody = z.object({ reason, code });
+// The bank's own reference for a transfer sent outside Stripe.
+const markPaidBody = z.object({ reason, code, bankReference: z.string().trim().min(3).max(80) });
 // Correcting a business, one field at a time. A discriminated union rather than
 // "a string or a boolean": a wrong pairing is then refused here with a message
 // naming the field, instead of reaching Postgres and failing as a driver error.
@@ -568,6 +570,24 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     staff(request);
     const query = parseInput(listQuery, request.query);
     return admin.listLedger({ limit: query.limit });
+  });
+
+  // Sending a business its share through Stripe, or recording that it was sent
+  // by bank transfer. Owner access, the reason and the authenticator code.
+  app.post('/payouts/:id/send', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(reasonAndCodeBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return admin.sendPayout(actor, id, body);
+  });
+
+  app.post('/payouts/:id/mark-paid', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(markPaidBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return admin.markPayoutPaid(actor, id, body);
   });
 
   app.get('/payouts', async (request) => {

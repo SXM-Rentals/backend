@@ -313,6 +313,10 @@ export const payouts = pgTable(
     paidOn: moment('paid_on'),
     status: payoutStatus('status').notNull().default('pending'),
     stripeTransferId: text('stripe_transfer_id'),
+    // Paid by bank transfer instead: the bank's own reference for it, and who
+    // recorded it.
+    bankReference: text('bank_reference'),
+    paidByStaffId: uuid('paid_by_staff_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

@@ -176,6 +176,13 @@
       "when": 1791125998891,
       "tag": "0024_automatic_deposit_holds",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791164895316,
+      "tag": "0025_payouts_and_live_mode",
+      "breakpoints": true
     }
   ]
 }
