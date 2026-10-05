@@ -57,6 +57,7 @@ import verificationRoutes from './routes/verification/index.js';
 import { createVerificationService } from './services/verification/index.js';
 import { createAdminAuthService } from './services/admin/auth.js';
 import { createAdminService } from './services/admin/index.js';
+import { createTestDataService } from './services/admin/test-data.js';
 import { createAdminStaffService } from './services/admin/staff.js';
 import { createAuthService } from './services/auth/index.js';
 import { createNotificationService } from './services/notifications/index.js';
@@ -217,6 +218,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Identity checks: Stripe Identity or staff, as the owner chooses.
   const verification = createVerificationService({ db, config, gateway, notifications, logger: app.log });
   const admin = createAdminService({ db, gateway, payments, notifications, integrations });
+  // The Godfather's test-data clearing, before launch only.
+  const testData = createTestDataService({ db, config });
   // Staff accounts, managed from the panel. It borrows the sign-in service's
   // lockout counters and session-ending, so there is one of each.
   const staffAccounts = createAdminStaffService({ db, auth: adminAuth, breachedPasswords });
@@ -257,6 +260,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         staffAccounts,
         verification,
         support,
+        testData,
       });
       // Later phases register verification, rewards, notifications, ... here.
     },

@@ -255,6 +255,7 @@ Everything lives under `/api/v1`.
 | GET · POST | `/admin/fleet-requests…` | Businesses asking us to set their fleet up · download a file · mark done |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code. With `override` (Owner and above), its upcoming rentals are cancelled and refunded in full first |
+| GET · POST | `/admin/test-data/status` · `/clear` | Before launch only: whether clearing test records is open, and clearing one kind — Godfather only, reason and authenticator code |
 | POST | `/admin/bookings/:id/cancel` | Cancel a rental as SXM Rentals, with a full refund or none — Owner and above, reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
 | PATCH | `/admin/providers/:id` | Correct one of its details, with a reason |
@@ -699,6 +700,26 @@ the only file that needs to change.
 - [ ] A Neon backup schedule you have actually restored from once
 - [ ] Identity checks decided — they are manual today
 - [ ] `npm audit` clean for what ships (CI checks this on every push)
+
+### Winding the database back to a moment (before launch)
+
+There is no button for this: it is a Neon step, done in Neon's console, because
+only the database itself can put back every row as it stood. It can only go back
+as far as the plan keeps history — 6 hours on Neon's Free plan, up to 7 days on
+Launch, up to 30 on Scale.
+
+1. In the Neon console, open the project → **Branches** → the branch the live
+   database is on → **Restore**.
+2. Choose the moment, check the preview, and restore. Neon keeps the state just
+   before the restore as a backup branch, so nothing is lost for good — including
+   audit-log entries made after that moment, which can be read there.
+3. Restart the API on Render, so it reconnects to the restored database.
+
+It restores the whole branch: if the development and live databases share one
+branch, both go back. And it cannot undo what already left the building: emails
+sent, texts and push notifications sent, calls made, anything at Stripe (payments,
+refunds, deposit holds, saved cards, the accounts businesses opened, payouts sent),
+bookings already sent to a business's own system, and photo files in Cloudinary.
 
 ---
 

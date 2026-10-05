@@ -36,6 +36,7 @@ import type { AdminService } from '../../services/admin/index.js';
 import type { AdminStaffService } from '../../services/admin/staff.js';
 import type { VerificationService } from '../../services/verification/index.js';
 import type { SupportService } from '../../services/support/index.js';
+import { CLEARABLE, type TestDataService } from '../../services/admin/test-data.js';
 import {
   fleetRequestFile,
   getFleetRequest,
@@ -46,6 +47,7 @@ import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../lib/passwords.js
 import type { Database } from '../../db/client.js';
 
 export type AdminRouteOptions = {
+  testData: TestDataService;
   db: Database;
   config: Config;
   admin: AdminService;
@@ -122,6 +124,7 @@ const staffResetBody = z.object({
   code,
 });
 const reasonAndCodeBody = z.object({ reason, code });
+const clearBody = z.object({ what: z.enum(CLEARABLE), reason, code });
 const closeProviderBody = reasonAndCodeBody.extend({ override: z.boolean().optional() });
 const staffCancelBody = z.object({ reason, code, refund: z.enum(['full', 'none']) });
 // The bank's own reference for a transfer sent outside Stripe.
@@ -409,6 +412,19 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   // ---- "SEND IT TO US" REQUESTS ----
   // Waiting ones first, oldest first. The files are private: listed here by
   // name, and only handed over one at a time as a download.
+  // ---- TEST DATA, BEFORE LAUNCH ----
+  // Godfather only. Whether clearing is open, and why — the panel prints it.
+  app.get('/test-data/status', async (request) => options.testData.status(staff(request)));
+
+  // Clears one kind of record, and only that. Refuses itself once Stripe has
+  // run live or ALLOW_TEST_RESET is not on. See services/admin/test-data.ts.
+  app.post('/test-data/clear', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const body = parseInput(clearBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return options.testData.clear(actor, body);
+  });
+
   app.get('/fleet-requests', async (request) => {
     staff(request);
     const { status } = parseInput(fleetRequestQuery, request.query);

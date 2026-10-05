@@ -142,6 +142,8 @@ export const auditAction = pgEnum('audit_action', [
   'payout_marked_paid',
   // A rental cancelled by staff, not by the renter.
   'booking_cancelled',
+  // Test records cleared by the Godfather before launch.
+  'test_records_cleared',
 ]);
 // ---- WHAT A MEMBER OF STAFF IS ALLOWED TO DO ----
 // Highest first. The order here is the hierarchy, and code compares positions in

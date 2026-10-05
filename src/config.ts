@@ -75,6 +75,10 @@ const envSchema = z
     // see it. "off" puts it on the site straight away — for testing before
     // launch. On unless set to "off".
     VEHICLE_APPROVAL: z.enum(['on', 'off']).default('on'),
+    // "on" opens the Godfather's test-data clearing, before launch only. Absent
+    // means shut — and it shuts for good anyway once Stripe has run live. See
+    // services/admin/test-data.ts.
+    ALLOW_TEST_RESET: z.enum(['on', 'off']).default('off'),
     // Twilio, for calls inside the app and sign-in codes by text. Calls need the
     // account, an API key and its secret, and the TwiML app that routes calls
     // (whose Voice address is https://<this API>/api/v1/calls/twiml); the push
@@ -150,6 +154,8 @@ export type Config = {
   identityMethod: 'stripe' | 'staff';
   // False only when VEHICLE_APPROVAL=off: new cars go live without staff.
   vehicleApprovalRequired: boolean;
+  // True only when ALLOW_TEST_RESET=on.
+  allowTestReset: boolean;
   expoAccessToken: string | undefined;
   twilio: {
     accountSid: string | undefined;
@@ -221,6 +227,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     featuresOff: splitList(env.FEATURES_OFF),
     identityMethod: env.IDENTITY_METHOD,
     vehicleApprovalRequired: env.VEHICLE_APPROVAL !== 'off',
+    allowTestReset: env.ALLOW_TEST_RESET === 'on',
     expoAccessToken: env.EXPO_ACCESS_TOKEN,
     twilio: {
       accountSid: env.TWILIO_ACCOUNT_SID,

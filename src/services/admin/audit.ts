@@ -50,7 +50,9 @@ export type AuditAction =
   | 'payout_sent'
   | 'payout_marked_paid'
   // A rental cancelled by staff, not by the renter.
-  | 'booking_cancelled';
+  | 'booking_cancelled'
+  // Test records cleared by the Godfather before launch.
+  | 'test_records_cleared';
 
 export type AuditSubjectType =
   | 'customer'

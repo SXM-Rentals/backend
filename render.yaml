@@ -131,6 +131,9 @@ services:
       # "off" puts newly added cars on the site without staff approval. Testing only.
       - key: VEHICLE_APPROVAL
         sync: false
+      # "on" opens the Godfather's test-data clearing, before launch only.
+      - key: ALLOW_TEST_RESET
+        sync: false
       # Expo's access token. The only thing that lets a push go out as SXM Rentals.
       - key: EXPO_ACCESS_TOKEN
         sync: false
