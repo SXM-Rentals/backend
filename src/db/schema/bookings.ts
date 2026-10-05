@@ -23,6 +23,7 @@ import { boolean, check, date, index, integer, jsonb, pgTable, smallint, text, u
 import { adminStaff } from './admin.js';
 import { createdAt, moment, updatedAt } from './columns.js';
 import {
+  bookingCancelledBy,
   bookingStatus,
   collectionMethod,
   depositAutoHoldStatus,
@@ -157,6 +158,9 @@ export const bookings = pgTable(
     agreementVersion: text('agreement_version'),
     agreementDrawn: boolean('agreement_drawn').notNull().default(false),
     cancelledAt: moment('cancelled_at'),
+    // Who cancelled it. Today only the renter can; the business and staff are
+    // here so the record is ready for when they can too.
+    cancelledBy: bookingCancelledBy('cancelled_by'),
     // Why the renter cancelled, if they said: plans_changed, found_another_car,
     // flight_changed, price or other. Shown to the business on the booking.
     cancellationReason: text('cancellation_reason'),

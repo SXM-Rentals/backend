@@ -64,6 +64,8 @@ export const vehicleBlockReason = pgEnum('vehicle_block_reason', ['servicing', '
 
 // ---- BOOKINGS AND MONEY ----
 export const bookingStatus = pgEnum('booking_status', ['upcoming', 'active', 'completed', 'cancelled']);
+// Who cancelled a booking: the renter, the rental business, or SXM Rentals staff.
+export const bookingCancelledBy = pgEnum('booking_cancelled_by', ['customer', 'provider', 'staff']);
 export const depositStatus = pgEnum('deposit_status', ['not_taken', 'held', 'released', 'claimed']);
 // Holding the deposit automatically on the card that paid: being placed now,
 // placed, or tried and in need of the customer (their bank wants them to approve

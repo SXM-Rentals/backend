@@ -488,6 +488,8 @@ export async function addVehicle(db: Database, providerId: string, input: Vehicl
           // Declaring accidents answers the question as surely as saying "none".
           accidentHistoryDeclared: input.accidentHistoryDeclared ?? Boolean(input.accidentHistory?.length),
           listingStatus: approvalRequired ? 'pending_review' : 'live',
+          // On sale from the moment it is added, while approval is switched off.
+          listedAt: approvalRequired ? null : new Date(),
         })
         .returning(),
       );

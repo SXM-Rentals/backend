@@ -750,7 +750,11 @@ export function createAdminService(deps: AdminServiceDeps) {
       if (!vehicle) throw notFound('We could not find that vehicle.');
 
       const after = input.approve ? 'live' : 'suspended';
-      await db.update(vehicles).set({ listingStatus: after }).where(eq(vehicles.id, vehicle.id));
+      await db
+        .update(vehicles)
+        // The first approval is when it went on sale; a later one keeps that date.
+        .set({ listingStatus: after, ...(input.approve ? { listedAt: vehicle.listedAt ?? new Date() } : {}) })
+        .where(eq(vehicles.id, vehicle.id));
 
       await recordAudit(db, {
         staffId: actor.staffId,

@@ -135,6 +135,10 @@ export function toAdminVehicle(vehicle: VehicleRow, providerName: string) {
     listingStatus: vehicle.listingStatus,
     // For checking the car's papers.
     registration: vehicle.registration,
+    // When the business added it, and when it first went on sale (null until
+    // then, and for some cars added before this was recorded).
+    createdAt: vehicle.createdAt.toISOString(),
+    listedAt: vehicle.listedAt?.toISOString() ?? null,
   };
 }
 
@@ -169,6 +173,11 @@ export function toAdminBooking(
     agreementSigned: booking.agreementSignedAt !== null,
     messageCount,
     createdAt: booking.createdAt.toISOString(),
+    // When it was cancelled, by whom, and the reason the renter picked, if any.
+    // All null for a booking that was not cancelled.
+    cancelledAt: booking.cancelledAt?.toISOString() ?? null,
+    cancelledBy: booking.cancelledBy,
+    cancellationReason: booking.cancellationReason,
   };
 }
 

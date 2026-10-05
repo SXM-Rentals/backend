@@ -90,6 +90,10 @@ export const vehicles = pgTable(
     description: text('description').notNull().default(''),
     // New listings wait for staff review before customers can see them.
     listingStatus: listingStatus('listing_status').notNull().default('pending_review'),
+    // The first time the car went on sale — when staff approved it, or when it
+    // was added while approval was switched off. Often days after it was added,
+    // and the moment that matters commercially. Never moved by a later relisting.
+    listedAt: moment('listed_at'),
     // The number plate. Seen by the business and staff only, never by customers
     // — staff need it to check the car's papers. Stored in capitals.
     registration: text('registration'),

@@ -519,7 +519,7 @@ export async function cancelBooking(
 
   const [booking] = await db
     .update(bookings)
-    .set({ status: 'cancelled', cancelledAt: new Date(), cancellationReason: reason ?? null })
+    .set({ status: 'cancelled', cancelledAt: new Date(), cancelledBy: 'customer', cancellationReason: reason ?? null })
     .where(and(eq(bookings.id, existing.id), eq(bookings.customerId, actor.customerId), ne(bookings.status, 'cancelled')))
     .returning();
   if (!booking) throw conflict('already_cancelled', 'That booking is already cancelled.');
