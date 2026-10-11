@@ -19,7 +19,7 @@
 
 import { requireTier } from './tiers.js';
 import { markPayoutPaid as markPaidByBank, sendPayout as sendStripePayout } from '../payment-splitting/index.js';
-import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adminStaff,
@@ -69,6 +69,10 @@ export type AdminServiceDeps = {
   // system. Optional: a cancellation never fails because a message did not go.
   notifications?: { bookingCancelled(bookingId: string): Promise<void> } | undefined;
   integrations?: { bookingChanged(providerId: string, bookingId: string, type: 'booking.cancelled'): void } | undefined;
+  // Whether the Godfather's test-data clearing is open (see test-data.ts). Only
+  // then may a business that has traded be deleted, with its history. Left out,
+  // it counts as shut.
+  testResetOpen?: (() => Promise<boolean>) | undefined;
 };
 
 // How long something has been waiting, in the words the queue screen uses.
@@ -612,6 +616,87 @@ export function createAdminService(deps: AdminServiceDeps) {
         reason: input.reason,
       });
       return this.getProvider(provider.id);
+    },
+
+    // ---- DELETING A BUSINESS FOR GOOD ----
+    // Closing keeps a business on record and can be undone; this removes it.
+    // Owner and above, with the code (checked by the route), on the live platform
+    // as much as before launch. Meant for a business that never traded — an
+    // application made by mistake, a duplicate, a test — and it takes the cars,
+    // photos, papers, discount codes, conversations, fleet requests and payout
+    // set-up with it. The people who ran it keep their own accounts.
+    //
+    // A business with bookings or payouts on record is refused, with nothing
+    // changed: those are renters' rentals and the platform's money records, and
+    // deleting the business would mean deleting them. Close it instead. The one
+    // exception is test data before launch: while the Godfather's test-data
+    // clearing is open, the Godfather may delete a business together with its
+    // bookings, deposits, refund requests, disputes, payment lines and payouts.
+    async deleteProvider(actor: AdminActor, id: string, input: { reason: string }) {
+      requireTier(actor, 'owner');
+      const provider = await loadProvider(id);
+      const [bookingCount] = await db.select({ value: count() }).from(bookings).where(eq(bookings.providerId, provider.id));
+      const [payoutCount] = await db.select({ value: count() }).from(payouts).where(eq(payouts.providerId, provider.id));
+      const traded = (bookingCount?.value ?? 0) + (payoutCount?.value ?? 0) > 0;
+      const takesHistory = traded && actor.tier === 'godfather' && (await deps.testResetOpen?.()) === true;
+      if (traded && !takesHistory) {
+        throw conflict(
+          'has_history',
+          `${provider.businessName} has ${bookingCount?.value ?? 0} booking(s) and ${payoutCount?.value ?? 0} payout(s) on record. ` +
+            'Those are renters\' rentals and money records, so a business that has traded cannot be deleted. ' +
+            'Close it instead: it comes off the apps and the website at once, and can be reopened. Nothing was changed.',
+        );
+      }
+
+      const removed = await db.transaction(async (tx) => {
+        const t = tx as unknown as Database;
+        const theirBookings = () => t.select({ id: bookings.id }).from(bookings).where(eq(bookings.providerId, provider.id));
+        // Without leave to take its history, none of it is even attempted: if a
+        // booking arrived a moment after the check above, the database refuses
+        // to delete the car it is for, and nothing changes.
+        const theirHistory = takesHistory
+          ? {
+              deposits: (await t.delete(deposits).where(inArray(deposits.bookingId, theirBookings())).returning({ id: deposits.id })).length,
+              refundRequests: (await t.delete(refundRequests).where(inArray(refundRequests.bookingId, theirBookings())).returning({ id: refundRequests.id })).length,
+              disputes: (await t.delete(disputes).where(inArray(disputes.bookingId, theirBookings())).returning({ id: disputes.id })).length,
+              paymentLines: (await t.delete(ledgerEntries).where(inArray(ledgerEntries.bookingId, theirBookings())).returning({ id: ledgerEntries.id })).length,
+              bookings: (await t.delete(bookings).where(eq(bookings.providerId, provider.id)).returning({ id: bookings.id })).length,
+              payouts: (await t.delete(payouts).where(eq(payouts.providerId, provider.id)).returning({ id: payouts.id })).length,
+            }
+          : { deposits: 0, refundRequests: 0, disputes: 0, paymentLines: 0, bookings: 0, payouts: 0 };
+        const gone = {
+          ...theirHistory,
+          vehicles: (await t.delete(vehicles).where(eq(vehicles.providerId, provider.id)).returning({ id: vehicles.id })).length,
+        };
+        await t.delete(providers).where(eq(providers.id, provider.id));
+
+        const history = gone.bookings + gone.payouts > 0 ? `, ${gone.bookings} booking(s) and ${gone.payouts} payout(s) (test data)` : '';
+        await recordAudit(t, {
+          staffId: actor.staffId,
+          action: 'business_deleted',
+          subjectType: 'provider',
+          subjectId: provider.id,
+          subjectLabel: `Business · ${provider.businessName}`,
+          field: 'Business',
+          before: provider.deletedAt ? 'Closed' : 'Open',
+          after: `Deleted, with ${gone.vehicles} car(s)${history}`,
+          reason: input.reason,
+        });
+        return gone;
+      });
+
+      return {
+        id: provider.id,
+        businessName: provider.businessName,
+        deleted: true,
+        removed,
+        detail:
+          `${provider.businessName} is deleted, with ${removed.vehicles} car(s), their photos and papers, its discount codes, conversations and payout set-up. ` +
+          (removed.bookings + removed.payouts > 0
+            ? `Its test history went with it: ${removed.bookings} booking(s), ${removed.deposits} deposit(s), ${removed.paymentLines} payment line(s) and ${removed.payouts} payout(s). `
+            : '') +
+          'The people who ran it keep their own accounts. A Stripe account it opened stays at Stripe.',
+      };
     },
 
     async reopenProvider(actor: AdminActor, id: string, input: { reason: string }) {

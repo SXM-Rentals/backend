@@ -100,6 +100,7 @@ readable list, if any are wrong — and production is stricter: it requires
 | `EXPO_ACCESS_TOKEN` | Lets pushes go out through Expo. Empty: nothing is pushed |
 | `IDENTITY_METHOD` | `staff` or `stripe` — how identity checks are made once switched on |
 | `FEATURES` · `FEATURES_OFF` | Which features the phone app may show — names, or `all`. A feature also has to be built and set up. See `GET /capabilities` |
+| `ALLOW_TEST_RESET` | `on` lets the Godfather clear test records from the admin panel, before launch only. `off` or absent = shut. Shuts for good anyway once Stripe has run live |
 
 Never put a real secret in `.env.example` or anywhere else git can see.
 
@@ -255,7 +256,8 @@ Everything lives under `/api/v1`.
 | GET · POST | `/admin/fleet-requests…` | Businesses asking us to set their fleet up · download a file · mark done |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code. With `override` (Owner and above), its upcoming rentals are cancelled and refunded in full first |
-| GET · POST | `/admin/test-data/status` · `/clear` | Before launch only: whether clearing test records is open, and clearing one kind — Godfather only, reason and authenticator code |
+| POST | `/admin/providers/:id/delete` | Delete a business for good — Owner and above, reason and authenticator code. Refused for a business with bookings or payouts on record (close it instead), except test data before launch |
+| GET · POST | `/admin/test-data/status` · `/clear` | Before launch only: whether clearing test records is open, and clearing one kind or `everything` at once — Godfather only, reason and authenticator code |
 | POST | `/admin/bookings/:id/cancel` | Cancel a rental as SXM Rentals, with a full refund or none — Owner and above, reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
 | PATCH | `/admin/providers/:id` | Correct one of its details, with a reason |
@@ -700,6 +702,28 @@ the only file that needs to change.
 - [ ] A Neon backup schedule you have actually restored from once
 - [ ] Identity checks decided — they are manual today
 - [ ] `npm audit` clean for what ships (CI checks this on every push)
+
+### Clearing test records (before launch)
+
+The Godfather can clear what testing left behind from the admin panel's Test
+Data screen: one kind at a time — bookings, payments, payouts, deposits, refund
+requests, disputes, cars, businesses, customer accounts, points, conversations,
+notifications, support messages, fleet requests, the audit log — or
+**Everything** at once, which runs them all in the right order in one go.
+
+- It is open only while `ALLOW_TEST_RESET=on` **and** Stripe has never run in
+  live mode here. Putting live Stripe keys on the server shuts it for good.
+- Staff accounts and platform settings are never cleared, by anything.
+- The audit log is cleared only when that is what was asked for (the log itself,
+  or Everything), and is never left empty: an entry saying who cleared it, when,
+  how much and why is always written straight after.
+- Nothing at Stripe, in Cloudinary or already sent (emails, texts, pushes) is
+  touched.
+
+Deleting a single business works on the live platform too, from its page in the
+panel (Owner and above): a business that never traded goes with its cars and
+everything else that was only its own. One with bookings or payouts on record is
+refused — those are renters' rentals and money records — so close it instead.
 
 ### Winding the database back to a moment (before launch)
 

@@ -416,8 +416,9 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
   // Godfather only. Whether clearing is open, and why — the panel prints it.
   app.get('/test-data/status', async (request) => options.testData.status(staff(request)));
 
-  // Clears one kind of record, and only that. Refuses itself once Stripe has
-  // run live or ALLOW_TEST_RESET is not on. See services/admin/test-data.ts.
+  // Clears one kind of record and only that, or "everything" at once. Refuses
+  // itself once Stripe has run live or ALLOW_TEST_RESET is not on. See
+  // services/admin/test-data.ts.
   app.post('/test-data/clear', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
     const actor = staff(request);
     const body = parseInput(clearBody, request.body);
@@ -517,6 +518,17 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     const body = parseInput(reasonAndCodeBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
     return admin.reopenProvider(actor, id, body);
+  });
+
+  // Deleting a business for good, not just closing it. Owner and above, with the
+  // code. Refused (has_history) for a business with bookings or payouts on
+  // record, which is closed instead. See deleteProvider.
+  app.post('/providers/:id/delete', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(reasonAndCodeBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return admin.deleteProvider(actor, id, body);
   });
 
   // Correcting one detail. No code: this is a typo fix, the same as a customer's

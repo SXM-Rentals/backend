@@ -13,7 +13,9 @@
 // later by somebody who was not there, possibly an accountant who does not know
 // the database. "Explorer" becoming "VIP" tells that story; { tier: 2 } does not.
 //
-// Nothing here ever updates or deletes a row. The log is only ever added to.
+// Nothing here ever updates or deletes a row. The log is only ever added to —
+// the one exception is the Godfather clearing it before launch (see
+// test-data.ts), which leaves an entry saying so.
 
 import { desc, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
@@ -52,7 +54,9 @@ export type AuditAction =
   // A rental cancelled by staff, not by the renter.
   | 'booking_cancelled'
   // Test records cleared by the Godfather before launch.
-  | 'test_records_cleared';
+  | 'test_records_cleared'
+  // A rental business removed for good, not just closed.
+  | 'business_deleted';
 
 export type AuditSubjectType =
   | 'customer'

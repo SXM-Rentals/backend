@@ -204,6 +204,13 @@
       "when": 1791187009585,
       "tag": "0028_test_records_cleared",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791746974176,
+      "tag": "0029_business_deleted",
+      "breakpoints": true
     }
   ]
 }
