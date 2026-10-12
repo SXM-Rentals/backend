@@ -167,6 +167,9 @@ describe('who may see and use saved versions', () => {
       'deposits',
       'refunds',
       'disputes',
+      'customers',
+      'providers',
+      'vehicles',
     ]);
   });
 });
@@ -180,10 +183,10 @@ describe('saving a version', () => {
     expect(version).toMatchObject({
       note: 'Before the big clear-out',
       createdBy: { id: godfather.staffId, name: 'Gio Godfather' },
-      counts: { audit_log: 3, bookings: 2, payments: 2, payouts: 2, deposits: 2, refunds: 2, disputes: 2 },
-      missing: { audit_log: 0, bookings: 0, payments: 0, payouts: 0, deposits: 0, refunds: 0, disputes: 0 },
+      counts: { audit_log: 3, bookings: 2, payments: 2, payouts: 2, deposits: 2, refunds: 2, disputes: 2, customers: 2, providers: 2, vehicles: 2 },
+      missing: { audit_log: 0, bookings: 0, payments: 0, payouts: 0, deposits: 0, refunds: 0, disputes: 0, customers: 0, providers: 0, vehicles: 0 },
     });
-    expect(await count(dataVersionRecords)).toBe(15);
+    expect(await count(dataVersionRecords)).toBe(21);
   });
 
   it('can be saved with no body at all, and without a note', async () => {
@@ -223,7 +226,7 @@ describe('looking inside a version', () => {
 
   it('lists everything, every record still in the live tables', async () => {
     const all = await records('?limit=200');
-    expect(all.total).toBe(15);
+    expect(all.total).toBe(21);
     expect(all.records.every((record: { inLive: boolean }) => record.inLive)).toBe(true);
     expect((await records('?show=missing')).total).toBe(0);
   });
@@ -254,7 +257,7 @@ describe('looking inside a version', () => {
     const first = await records('?sort=summary&dir=asc&limit=5');
     const second = await records('?sort=summary&dir=asc&limit=5&offset=5');
     expect(first.records).toHaveLength(5);
-    expect(second.total).toBe(15);
+    expect(second.total).toBe(21);
     expect(first.records.map((r: { id: string }) => r.id)).not.toEqual(second.records.map((r: { id: string }) => r.id));
   });
 
@@ -325,8 +328,9 @@ describe('putting things back', () => {
 
     const res = await restore(versionId);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ restored: 15, alreadyThere: 0, failedCount: 0, failed: [] });
-    expect(res.json().detail).toBe('15 record(s) put back. ');
+    // The customers, businesses and cars were never cleared, so they were already there.
+    expect(res.json()).toMatchObject({ restored: 15, alreadyThere: 6, failedCount: 0, failed: [] });
+    expect(res.json().detail).toBe('15 record(s) put back. 6 were already there and left as they are. ');
 
     for (const table of [bookings, deposits, ledgerEntries, payouts, refundRequests, disputes, bookingPriceLines, bookingSignatures, reviews]) {
       expect(await count(table)).toBe(2);
@@ -345,35 +349,43 @@ describe('putting things back', () => {
   it('never overwrites what is there now: an edited booking stays as it was edited', async () => {
     await ctx.db.update(bookings).set({ status: 'cancelled' }).where(eq(bookings.id, a.booking.id));
     const res = await restore(versionId);
-    expect(res.json()).toMatchObject({ restored: 0, alreadyThere: 15, failedCount: 0 });
-    expect(res.json().detail).toBe('Nothing needed putting back. 15 were already there and left as they are. ');
+    expect(res.json()).toMatchObject({ restored: 0, alreadyThere: 21, failedCount: 0 });
+    expect(res.json().detail).toBe('Nothing needed putting back. 21 were already there and left as they are. ');
     expect((await ctx.db.select().from(bookings).where(eq(bookings.id, a.booking.id)))[0]!.status).toBe('cancelled');
     await ctx.db.update(bookings).set({ status: 'completed' }).where(eq(bookings.id, a.booking.id));
   });
 });
 
 describe('a record that cannot go back', () => {
-  it('says why, and everything else still goes back', async () => {
-    // One booking's car is gone for good; the other booking and all else is cleared.
-    for (const what of ['deposits', 'bookings', 'payments']) await clear(what);
+  it('says why when its car is gone, while the rest of what was asked for still goes back', async () => {
+    for (const what of ['deposits', 'bookings']) await clear(what);
     await ctx.db.delete(vehicles).where(eq(vehicles.id, a.vehicle.id));
 
-    const res = await restore(versionId);
+    const res = await restore(versionId, { kind: 'bookings' });
     const body = res.json();
     expect(res.statusCode).toBe(200);
-    const why = Object.fromEntries(body.failed.map((f: { kind: string; why: string }) => [f.kind, f.why]));
-    expect(why.bookings).toBe('its car, customer or business has since been deleted');
-    expect(why.deposits).toBe('its booking is not there — put the booking back first');
-    // The first booking and its deposit could not return; the second's did.
-    expect(body.failedCount).toBe(4);
-    expect(await count(bookings)).toBe(1);
+    expect(body).toMatchObject({ restored: 1, failedCount: 1 });
+    expect(body.failed[0]).toMatchObject({ kind: 'bookings', why: 'its car, customer or business has since been deleted' });
+    expect(body.failed[0].summary).toContain(a.booking.reference);
+    expect(body.detail).toContain('1 could not be put back — each says why.');
     expect((await ctx.db.select().from(bookings))[0]!.id).toBe(b.booking.id);
-    expect(await count(deposits)).toBe(1);
-    // Payment lines go back whatever happened to the booking: its one is detached.
-    const lines = await ctx.db.select().from(ledgerEntries);
-    expect(lines).toHaveLength(2);
-    expect(lines.filter((line) => line.bookingId === null)).toHaveLength(1);
-    expect(body.detail).toContain('could not be put back — each says why.');
+  });
+
+  it('says why when its booking is not back yet', async () => {
+    const body = (await restore(versionId, { kind: 'deposits' })).json();
+    // The first booking is still missing; the second came back above.
+    expect(body).toMatchObject({ restored: 1, failedCount: 1 });
+    expect(body.failed[0]).toMatchObject({ kind: 'deposits', why: 'its booking is not there — put the booking back first' });
+  });
+
+  it('puts the car back first when everything is restored, so the booking goes back too', async () => {
+    const res = await restore(versionId);
+    expect(res.json()).toMatchObject({ failedCount: 0 });
+    expect(await count(vehicles)).toBe(2);
+    expect(await count(bookings)).toBe(2);
+    expect(await count(deposits)).toBe(2);
+    expect(await count(refundRequests)).toBe(2);
+    expect(await count(disputes)).toBe(2);
   });
 
   it('lets a booking go back without a payout that is gone, owed again', async () => {
@@ -382,7 +394,7 @@ describe('a record that cannot go back', () => {
     await clear('payouts');
     const res = await restore(versionId, { kind: 'bookings' });
     const [booking] = await ctx.db.select().from(bookings).where(eq(bookings.id, b.booking.id));
-    expect(res.json().restored).toBeGreaterThanOrEqual(1);
+    expect(res.json()).toMatchObject({ restored: 2, failedCount: 0 });
     expect(booking!.payoutId).toBeNull();
   });
 });

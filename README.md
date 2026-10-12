@@ -742,14 +742,23 @@ including old clearing notes.
 **Saved versions** are the undo for all of that, and are seen by the Godfather
 alone. `POST /admin/backups` copies the audit log, bookings (with their price
 lines, signature, date changes and review), payments, payouts, deposits, refund
-requests and disputes **only when it is asked to** — nothing is copied in the
-background, so a delete leaves no copy behind unless a version was saved first.
+requests, disputes, customer accounts (with their points), rental businesses (with
+their private profile, payout set-up, discount codes and the people who run them)
+and cars (with photo records, papers, blocked days and accident history)
+**only when it is asked to** — nothing is copied in the background, so a delete
+leaves no copy behind unless a version was saved first. **A customer's password
+and sign-ins are never copied** (a customer put back resets their password or
+signs in with a code), nor is a business's connection to its own booking software
+(it connects again); photo and paper files never left Cloudinary, only the records
+pointing at them are copied.
 `GET /admin/backups/:id/records` lists what is in a version, searchable
 (`q`), filterable (`kind`, `show=missing` for just what has since been deleted)
 and sortable (`sort` = at, summary, amount or kind; `dir`), a page at a time, and
 each record says whether it is `inLive`. `POST /admin/backups/:id/restore` puts
 back what is missing — a whole version, one `kind`, or chosen `recordIds` — in the
-order the database needs. It **never overwrites** what is there now, tells a
+order the database needs (customers, businesses, cars, payouts, bookings, deposits,
+payments, refunds, disputes, audit log), so a clear of Everything can be undone with
+one restore. It **never overwrites** what is there now, tells a
 record that cannot go back (its car, customer, business or booking is gone) from
 the rest and says why, and drops a link to a payout or discount that no longer
 exists rather than blocking the booking. It keeps working after Stripe has run

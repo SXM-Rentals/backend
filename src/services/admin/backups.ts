@@ -1,10 +1,11 @@
 // SXM Rentals — Created by Giordano Bertin-Maurice
 // Copyright (c) 2026 Giordano Bertin-Maurice. All rights reserved.
 // WHAT THIS FILE DOES: The Godfather's saved versions — a copy of the audit log,
-// bookings, payments, payouts, deposits, refund requests and disputes, saved when
-// the Godfather presses "Save a version", that only the Godfather can browse,
-// search, sort and restore from. It is the undo for the clears and deletes in
-// test-data.ts: anything removed since a version was saved can be put back.
+// bookings, payments, payouts, deposits, refund requests, disputes, customer
+// accounts, rental businesses and cars, saved when the Godfather presses "Save a
+// version", that only the Godfather can browse, search, sort and restore from. It
+// is the undo for the clears and deletes in test-data.ts: anything removed since a
+// version was saved can be put back.
 //
 // WHAT IT DOES AND DOES NOT DO
 //   - A version is saved ONLY when asked for. Nothing is copied in the
@@ -13,15 +14,29 @@
 //   - Restoring PUTS BACK WHAT IS MISSING. It never overwrites a record that is
 //     there now and never changes one: a booking that has been edited since stays
 //     as it is, and a record that is still present is counted as "already there".
-//   - A record whose car, customer, business or booking has since been deleted
-//     cannot be put back on its own: it is reported with the reason, and the rest
-//     still goes back. Restoring a whole version goes in the order the database
-//     needs (payouts, bookings, deposits, payments, refunds, disputes, then the
-//     audit log), so a booking and its deposit return together.
-//   - A booking goes back WITH its price lines, signature, date changes and review.
-//     A payment line whose booking is gone goes back detached from it, as the
+//   - A record whose parent is gone cannot be put back on its own: a booking
+//     needs its car, customer and business; a car needs its business. It is
+//     reported with the reason, and the rest still goes back. Restoring a whole
+//     version goes in the order the database needs (customers, businesses, cars,
+//     payouts, bookings, deposits, payments, refunds, disputes, the audit log), so
+//     a clear of everything can be undone in one go.
+//   - A record goes back WITH what belongs to it: a booking with its price lines,
+//     signature, date changes and review; a car with its photo records, papers,
+//     blocked days and accident history; a business with its private profile,
+//     payout set-up, discount codes and the people who run it; a customer with
+//     their points.
+//   - A payment line whose booking is gone goes back detached from it, as the
 //     clear leaves them; a booking's link to a payout or discount that is gone is
 //     dropped (the payout is owed again) rather than blocking it.
+//
+// WHAT IS NEVER COPIED. Customers' passwords, sign-ins, sessions, devices and
+// codes live in other tables and are not in a version: a customer put back has
+// their account, details and points, and signs back in by resetting their
+// password or with a code. A business's connection to its own booking software
+// (the key and secrets) is not copied either; it connects again. Photo and paper
+// FILES are not copied — they never left Cloudinary; only the records pointing at
+// them are.
+//
 //   - Nothing here writes an audit entry, saving, restoring or deleting a version.
 //
 // GODFATHER ONLY, always — saving and browsing need only the sign-in; restoring
@@ -39,6 +54,7 @@ import {
   bookings,
   bookingSignatures,
   businessPromotions,
+  customers,
   dataVersionRecords,
   dataVersions,
   dateChangeRequests,
@@ -47,8 +63,18 @@ import {
   ledgerEntries,
   payouts,
   promoCodes,
+  providerBusinessProfiles,
+  providerMembers,
+  providerPayoutAccounts,
+  providers,
   refundRequests,
   reviews,
+  rewardLedger,
+  vehicleAccidentRecords,
+  vehicleBlocks,
+  vehicleDocuments,
+  vehiclePhotos,
+  vehicles,
 } from '../../db/schema/index.js';
 import { conflict, notFound } from '../../lib/errors.js';
 import { isUuid } from '../../lib/ownership.js';
@@ -58,7 +84,18 @@ import { requireTier } from './tiers.js';
 export const MAX_VERSIONS = 20;
 const PAGE_LIMIT = 200;
 
-export const BACKUP_KINDS = ['audit_log', 'bookings', 'payments', 'payouts', 'deposits', 'refunds', 'disputes'] as const;
+export const BACKUP_KINDS = [
+  'audit_log',
+  'bookings',
+  'payments',
+  'payouts',
+  'deposits',
+  'refunds',
+  'disputes',
+  'customers',
+  'providers',
+  'vehicles',
+] as const;
 export type BackupKind = (typeof BACKUP_KINDS)[number];
 
 export const KIND_LABELS: Record<BackupKind, string> = {
@@ -69,10 +106,24 @@ export const KIND_LABELS: Record<BackupKind, string> = {
   deposits: 'Deposits',
   refunds: 'Refund requests',
   disputes: 'Disputes',
+  customers: 'Customer accounts',
+  providers: 'Rental businesses',
+  vehicles: 'Vehicles',
 };
 
 // The order a whole version goes back in: what is pointed at before what points.
-const RESTORE_ORDER: BackupKind[] = ['payouts', 'bookings', 'deposits', 'payments', 'refunds', 'disputes', 'audit_log'];
+const RESTORE_ORDER: BackupKind[] = [
+  'customers',
+  'providers',
+  'vehicles',
+  'payouts',
+  'bookings',
+  'deposits',
+  'payments',
+  'refunds',
+  'disputes',
+  'audit_log',
+];
 
 const TABLES: Record<BackupKind, PgTable> = {
   audit_log: auditLog,
@@ -82,18 +133,38 @@ const TABLES: Record<BackupKind, PgTable> = {
   deposits,
   refunds: refundRequests,
   disputes,
+  customers,
+  providers,
+  vehicles,
 };
 const idColumn = (kind: BackupKind) => getTableColumns(TABLES[kind]).id as AnyPgColumn;
 
-// A booking's own records, saved inside it and put back with it.
-const BOOKING_CHILDREN = {
-  priceLines: bookingPriceLines,
-  signature: bookingSignatures,
-  dateChanges: dateChangeRequests,
-  review: reviews,
-} as const;
-type ChildKey = keyof typeof BOOKING_CHILDREN;
-const CHILD_KEYS = Object.keys(BOOKING_CHILDREN) as ChildKey[];
+// What belongs to a record and is saved inside it and put back with it. parentKey
+// is the column that points at the record.
+type Child = { table: PgTable; parentKey: string };
+const CHILDREN: Partial<Record<BackupKind, Record<string, Child>>> = {
+  bookings: {
+    priceLines: { table: bookingPriceLines, parentKey: 'bookingId' },
+    signature: { table: bookingSignatures, parentKey: 'bookingId' },
+    dateChanges: { table: dateChangeRequests, parentKey: 'bookingId' },
+    review: { table: reviews, parentKey: 'bookingId' },
+  },
+  vehicles: {
+    photos: { table: vehiclePhotos, parentKey: 'vehicleId' },
+    documents: { table: vehicleDocuments, parentKey: 'vehicleId' },
+    blocks: { table: vehicleBlocks, parentKey: 'vehicleId' },
+    accidents: { table: vehicleAccidentRecords, parentKey: 'vehicleId' },
+  },
+  providers: {
+    profile: { table: providerBusinessProfiles, parentKey: 'providerId' },
+    members: { table: providerMembers, parentKey: 'providerId' },
+    payoutAccount: { table: providerPayoutAccounts, parentKey: 'providerId' },
+    promotions: { table: businessPromotions, parentKey: 'providerId' },
+  },
+  customers: {
+    points: { table: rewardLedger, parentKey: 'customerId' },
+  },
+};
 
 // A row as plain data: dates become text, nothing else changes.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -149,6 +220,16 @@ function describe(kind: BackupKind, row: Row, refs: Map<string, string>): Descri
       };
     case 'disputes':
       return { summary: `${row.reference} · ${row.subject}`, at: new Date(row.openedAt), amountCents: row.amountAtStakeCents };
+    case 'customers':
+      return { summary: `${row.firstName} ${row.lastName} · ${row.email}`, at: new Date(row.createdAt), amountCents: null };
+    case 'providers':
+      return { summary: `${row.businessName} · ${row.town} · ${row.verificationStatus}`, at: new Date(row.createdAt), amountCents: null };
+    case 'vehicles':
+      return {
+        summary: `${row.reference} · ${row.year} ${row.make} ${row.model} · ${row.listingStatus}`,
+        at: new Date(row.createdAt),
+        amountCents: row.dailyRateCents,
+      };
   }
 }
 
@@ -173,9 +254,19 @@ function whyNot(kind: BackupKind, error: unknown): string {
       deposits: 'its booking is not there — put the booking back first',
       refunds: 'its booking is not there — put the booking back first',
       disputes: 'its booking is not there — put the booking back first',
+      customers: 'something it belongs to has since been deleted',
+      providers: 'something it belongs to has since been deleted',
+      vehicles: 'its business has since been deleted — put the business back first',
     }[kind];
   }
-  if (code === '23505') return 'a different record with the same reference exists now';
+  if (code === '23505') {
+    return (
+      {
+        customers: 'another account uses that email address now',
+        vehicles: 'a different vehicle with the same reference exists now',
+      } as Partial<Record<BackupKind, string>>
+    )[kind] ?? 'a different record with the same reference exists now';
+  }
   return 'the database would not take it';
 }
 
@@ -228,7 +319,7 @@ export function createBackupsService(deps: { db: Database }) {
       note: version.note,
       createdAt: version.createdAt.toISOString(),
       createdBy: version.createdByStaffId ? { id: version.createdByStaffId, name: nameOf.get(version.createdByStaffId) ?? 'Former staff' } : null,
-      counts: version.counts,
+      counts: Object.fromEntries(BACKUP_KINDS.map((kind) => [kind, version.counts[kind] ?? 0])),
       missing: Object.fromEntries(BACKUP_KINDS.map((kind) => [kind, missing.get(version.id)?.[kind] ?? 0])),
     }));
   }
@@ -283,6 +374,35 @@ export function createBackupsService(deps: { db: Database }) {
     return rows;
   }
 
+  // The same for what belongs to a record. Says what it had to leave out.
+  async function loosenChildren(
+    tx: Database,
+    kind: BackupKind,
+    key: string,
+    rows: Row[],
+  ): Promise<{ rows: Row[]; note?: string }> {
+    // A business's people can only be linked if they still have an account.
+    if (kind === 'providers' && key === 'members') {
+      const present = await existing(tx, customers, rows.map((row) => row.customerId));
+      const kept = rows.filter((row) => present.has(row.customerId));
+      const dropped = rows.length - kept.length;
+      return {
+        rows: kept,
+        ...(dropped > 0
+          ? {
+              note: `${dropped} ${dropped === 1 ? 'person' : 'people'} who ran the business no longer ${dropped === 1 ? 'has an account' : 'have accounts'}, so they were not linked to it again.`,
+            }
+          : {}),
+      };
+    }
+    // A points entry keeps its place even if the booking it came from is not back yet.
+    if (kind === 'customers' && key === 'points') {
+      const present = await existing(tx, bookings, rows.map((row) => row.bookingId).filter(Boolean));
+      return { rows: rows.map((row) => (row.bookingId && !present.has(row.bookingId) ? { ...row, bookingId: null } : row)) };
+    }
+    return { rows };
+  }
+
   return {
     // The kinds a version holds, for the panel's filters.
     kinds() {
@@ -313,15 +433,14 @@ export function createBackupsService(deps: { db: Database }) {
           const rows = (await t.select().from(TABLES[kind])) as Row[];
           counts[kind] = rows.length;
 
-          // A booking is saved with the records that belong to it.
+          // Each record is saved with what belongs to it.
+          const owned = CHILDREN[kind];
           const children = new Map<string, Row>();
-          if (kind === 'bookings') {
-            for (const key of CHILD_KEYS) {
-              for (const child of (await t.select().from(BOOKING_CHILDREN[key])) as Row[]) {
-                const forBooking = children.get(child.bookingId) ?? {};
-                (forBooking[key] ??= []).push(toJson(child));
-                children.set(child.bookingId, forBooking);
-              }
+          for (const [key, child] of Object.entries(owned ?? {})) {
+            for (const saved of (await t.select().from(child.table)) as Row[]) {
+              const forParent = children.get(saved[child.parentKey]) ?? {};
+              (forParent[key] ??= []).push(toJson(saved));
+              children.set(saved[child.parentKey], forParent);
             }
           }
 
@@ -334,7 +453,7 @@ export function createBackupsService(deps: { db: Database }) {
               summary: said.summary,
               at: said.at,
               amountCents: said.amountCents,
-              data: { row: toJson(row), ...(kind === 'bookings' ? { children: children.get(row.id) ?? {} } : {}) },
+              data: { row: toJson(row), ...(owned ? { children: children.get(row.id) ?? {} } : {}) },
             };
           });
           for (let start = 0; start < records.length; start += 200) {
@@ -473,6 +592,7 @@ export function createBackupsService(deps: { db: Database }) {
 
       const byKind: Record<string, { restored: number; alreadyThere: number; failed: number }> = {};
       const failed: { id: string; kind: string; summary: string; why: string }[] = [];
+      const notes: string[] = [];
       const tally = (kind: string) => (byKind[kind] ??= { restored: 0, alreadyThere: 0, failed: 0 });
 
       await db.transaction(async (tx) => {
@@ -481,6 +601,7 @@ export function createBackupsService(deps: { db: Database }) {
           const items = chosen.filter((item) => item.kind === kind).sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
           if (items.length === 0) continue;
           const counted = tally(kind);
+          const owned = CHILDREN[kind];
 
           // One record at a time, each in its own savepoint: one that cannot go
           // back is reported and the rest still do.
@@ -490,14 +611,18 @@ export function createBackupsService(deps: { db: Database }) {
                 const inner = sp as unknown as Database;
                 const [row] = await loosenLinks(inner, kind, [item.data.row as Row]);
                 const inserted = await insertMissing(inner, kind, [row!]);
-                if (inserted === 0 || kind !== 'bookings') return inserted;
-                // The booking itself went back: its own records go with it.
-                const children = (item.data.children ?? {}) as Record<ChildKey, Row[] | undefined>;
-                for (const key of CHILD_KEYS) {
-                  const saved = children[key] ?? [];
-                  if (saved.length === 0) continue;
-                  const table = BOOKING_CHILDREN[key];
-                  await inner.insert(table).values(saved.map((child) => revive(table, child)) as never).onConflictDoNothing();
+                if (inserted === 0 || !owned) return inserted;
+                // The record itself went back: what belongs to it goes with it.
+                const saved = (item.data.children ?? {}) as Record<string, Row[] | undefined>;
+                for (const [key, child] of Object.entries(owned)) {
+                  if (!saved[key]?.length) continue;
+                  const loosened = await loosenChildren(inner, kind, key, saved[key]!);
+                  if (loosened.note) notes.push(`${item.summary}: ${loosened.note}`);
+                  if (loosened.rows.length === 0) continue;
+                  await inner
+                    .insert(child.table)
+                    .values(loosened.rows.map((childRow) => revive(child.table, childRow)) as never)
+                    .onConflictDoNothing();
                 }
                 return inserted;
               });
@@ -509,7 +634,7 @@ export function createBackupsService(deps: { db: Database }) {
             }
           };
 
-          if (kind === 'bookings') {
+          if (owned) {
             for (const item of items) await one(item);
             continue;
           }
@@ -538,11 +663,13 @@ export function createBackupsService(deps: { db: Database }) {
         alreadyThere,
         failedCount: failed.length,
         failed: failed.slice(0, 200),
+        notes: notes.slice(0, 50),
         byKind,
         detail:
           (restored > 0 ? `${restored} record(s) put back. ` : 'Nothing needed putting back. ') +
           (alreadyThere > 0 ? `${alreadyThere} ${alreadyThere === 1 ? 'was' : 'were'} already there and left as they are. ` : '') +
-          (failed.length > 0 ? `${failed.length} could not be put back — each says why.` : ''),
+          (failed.length > 0 ? `${failed.length} could not be put back — each says why. ` : '') +
+          notes.slice(0, 5).join(' '),
       };
     },
 
