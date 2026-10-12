@@ -258,6 +258,7 @@ Everything lives under `/api/v1`.
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code. With `override` (Owner and above), its upcoming rentals are cancelled and refunded in full first |
 | POST | `/admin/providers/:id/delete` | Delete a business for good. The Godfather: immediately, empty body, nothing refused or logged. Owner: reason and authenticator code, refused for a business with bookings or payouts on record (close it instead), logged |
 | GET · POST | `/admin/test-data/status` · `/clear` | Before launch only: whether clearing test records is open, and clearing one kind or `everything` at once — Godfather only, reason and authenticator code |
+| POST | `/admin/test-data/delete` | Before launch only: delete ONE record (`what` + `id`) of a kind the status endpoint marks `single` — same terms as the clear. Refuses with `would_take_more` rather than take something else with it |
 | POST | `/admin/bookings/:id/cancel` | Cancel a rental as SXM Rentals, with a full refund or none — Owner and above, reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
 | PATCH | `/admin/providers/:id` | Correct one of its details, with a reason |
@@ -724,6 +725,17 @@ notifications, support messages, fleet requests, the audit log — or
   has changed.
 - Nothing at Stripe, in Cloudinary or already sent (emails, texts, pushes) is
   touched.
+
+**One record at a time** is the same capability, one row wide, on the same terms:
+`POST /admin/test-data/delete` with `what` and the record's own `id` (for
+`support`, the customer's id). It works for bookings, payments, payouts, deposits,
+refund requests, disputes, vehicles, customer accounts, support conversations,
+fleet requests and audit entries, and `GET /admin/test-data/status` says which
+kinds with `single: true`. It never cascades: a booking with a deposit, a vehicle
+or customer with bookings, a customer who runs a business are refused with
+`would_take_more` and a sentence saying what has to go first. It writes no audit
+entry, and deleting an audit entry leaves nothing in its place — any entry can go,
+including old clearing notes.
 
 Deleting a business works on the live platform too, from its page in the panel:
 

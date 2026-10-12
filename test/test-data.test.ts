@@ -189,8 +189,9 @@ describe('who may clear', () => {
         { name: 'never_live', met: true },
       ],
     });
-    expect(status.json().kinds).toContainEqual({ what: 'everything', label: 'Everything' });
-    expect(status.json().kinds).toContainEqual({ what: 'audit_log', label: 'Audit log' });
+    // single: true means one record of that kind can be deleted on its own.
+    expect(status.json().kinds).toContainEqual({ what: 'everything', label: 'Everything', single: false });
+    expect(status.json().kinds).toContainEqual({ what: 'audit_log', label: 'Audit log', single: true });
   });
 });
 

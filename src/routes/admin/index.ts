@@ -37,6 +37,7 @@ import type { AdminStaffService } from '../../services/admin/staff.js';
 import type { VerificationService } from '../../services/verification/index.js';
 import type { SupportService } from '../../services/support/index.js';
 import { CLEARABLE, type TestDataService } from '../../services/admin/test-data.js';
+import { SINGLE_KINDS } from '../../services/admin/test-data-single.js';
 import {
   fleetRequestFile,
   getFleetRequest,
@@ -125,6 +126,7 @@ const staffResetBody = z.object({
 });
 const reasonAndCodeBody = z.object({ reason, code });
 const clearBody = z.object({ what: z.enum(CLEARABLE), reason, code });
+const deleteOneBody = z.object({ what: z.enum(SINGLE_KINDS), id: z.string().trim().min(1).max(64), reason, code });
 const closeProviderBody = reasonAndCodeBody.extend({ override: z.boolean().optional() });
 const staffCancelBody = z.object({ reason, code, refund: z.enum(['full', 'none']) });
 // The bank's own reference for a transfer sent outside Stripe.
@@ -435,6 +437,17 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     const body = parseInput(clearBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
     return options.testData.clear(actor, body);
+  });
+
+  // Deletes ONE record of a kind — a booking, a payment line, an audit entry —
+  // on exactly the clear's terms: Godfather only, the code, the window, the same
+  // rate limit. Refuses (409 would_take_more) rather than take something else
+  // with it. For "support" the id is the customer's. See test-data-single.ts.
+  app.post('/test-data/delete', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const body = parseInput(deleteOneBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return options.testData.deleteOne(actor, body);
   });
 
   app.get('/fleet-requests', async (request) => {

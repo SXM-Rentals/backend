@@ -32,6 +32,9 @@
 // EACH CLEAR TAKES ONLY WHAT IT NAMES. Where the database will not let one kind
 // go without another (a deposit cannot exist without its booking), it refuses
 // and says what would have to go first, rather than taking more than was asked.
+// ONE RECORD AT A TIME is the same capability, one row wide, on the same terms
+// (deleteOne below; the per-kind work is in test-data-single.ts).
+//
 // "Everything" is the way to take it all in one go: it runs every clear in the
 // order the database needs, in one transaction, so it either all goes or none.
 // The audit log goes LAST of all, so a step that fails part-way can never leave a
@@ -67,6 +70,7 @@ import { recordedStripeMode, stripeKeyMode } from '../payments/stripe-mode.js';
 import { recordAudit } from './audit.js';
 import type { AdminActor } from './auth.js';
 import { requireTier } from './tiers.js';
+import { deleteOneRecord, SINGLE_KINDS, type SingleKind } from './test-data-single.js';
 
 export const CLEARABLE = [
   'everything',
@@ -537,8 +541,32 @@ export function createTestDataService(deps: { db: Database; config: Config }) {
       requireTier(actor, 'godfather');
       return {
         ...(await testResetStatus(db, config)),
-        kinds: CLEARABLE.map((what) => ({ what, label: LABELS[what] })),
+        // single: true means POST /test-data/delete works for this kind.
+        kinds: CLEARABLE.map((what) => ({ what, label: LABELS[what], single: (SINGLE_KINDS as readonly string[]).includes(what) })),
       };
+    },
+
+    // Deletes ONE record, on the clear's own terms: Godfather only, and only
+    // while the window is open (the route has already checked the code). Takes
+    // nothing else with it, writes no audit entry, and deleting an audit entry
+    // leaves nothing in its place. reason is accepted because the panel asks for
+    // one, and is not recorded.
+    async deleteOne(actor: AdminActor, input: { what: SingleKind; id: string; reason: string }) {
+      requireTier(actor, 'godfather');
+      await assertOpen(db, config);
+      return db.transaction(async (tx) => {
+        const t = tx as unknown as Database;
+        const before = await guardedCounts(t);
+        const detail = await deleteOneRecord(t, input.what, input.id);
+        const after = await guardedCounts(t);
+        if (before.staff !== after.staff || before.settings !== after.settings) {
+          throw new Error('A delete changed the staff accounts or the platform settings; undone.');
+        }
+        if (after.audit !== before.audit - (input.what === 'audit_log' ? 1 : 0)) {
+          throw new Error('A delete changed the audit log by more than the one entry it was asked to delete; undone.');
+        }
+        return { what: input.what, id: input.id, deleted: true as const, detail };
+      });
     },
 
     // reason is accepted because the panel asks for one, and is not recorded.
