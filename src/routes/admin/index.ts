@@ -205,6 +205,17 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     throw new AppError(403, 'read_only', 'Your account can see the panel but not change anything.');
   });
 
+  // A request that says it is JSON but carries nothing is "no body", not a
+  // malformed request. Fastify's own parser refuses it before any route runs,
+  // which would stop the Godfather's one-click business delete (sent with an
+  // empty body) from ever arriving. Broken JSON is refused exactly as before; and
+  // a route that needs a body still says so through its own validation.
+  const defaultJsonParser = app.getDefaultJsonParser('error', 'error');
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    if (typeof body === 'string' && body.trim() === '') return done(null, undefined);
+    return defaultJsonParser(request, body as string, done);
+  });
+
   // Who is asking, having passed both the password and the code.
   const staff = (request: Parameters<typeof requireAdmin>[0]) => requireAdmin(request, config);
 
@@ -520,12 +531,21 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     return admin.reopenProvider(actor, id, body);
   });
 
-  // Deleting a business for good, not just closing it. Owner and above, with the
-  // code. Refused (has_history) for a business with bookings or payouts on
-  // record, which is closed instead. See deleteProvider.
+  // Deleting a business for good, not just closing it.
+  //   - The Godfather: immediately. The body is ignored and may be empty — no
+  //     reason, no code — and nothing is refused or logged. See
+  //     deleteProviderOutright.
+  //   - Owner: a reason and the code. Refused (has_history) for a business with
+  //     bookings or payouts on record, which is closed instead. Logged.
+  //   - Anybody below Owner: refused.
+  // The tier is checked BEFORE the body is read, so the Godfather's empty body is
+  // accepted while an Owner's is still a 400, and nobody below Owner is told
+  // anything about what the body should have held.
   app.post('/providers/:id/delete', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
     const actor = staff(request);
     const { id } = parseInput(idParam, request.params);
+    if (actor.tier === 'godfather') return admin.deleteProviderOutright(actor, id);
+    requireTier(actor, 'owner');
     const body = parseInput(reasonAndCodeBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
     return admin.deleteProvider(actor, id, body);

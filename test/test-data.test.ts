@@ -5,12 +5,12 @@
 //
 // The tests that matter most, in order: once Stripe has run live, EVERY clear is
 // refused, the Godfather included; staff accounts and settings survive every
-// clear, Everything included; the audit log survives every clear except its own
-// and Everything, and is never left empty; only the Godfather, with the code,
-// can do it; and each clear takes only what it names — refusing, with nothing
+// clear, Everything included; no clear writes anything into the audit log, and
+// the log survives every clear except its own and Everything, which leave it
+// with no rows at all; only the Godfather, with the code, can do it; and each clear takes only what it names — refusing, with nothing
 // changed, when the database would make it take more.
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { generate as generateOtp } from 'otplib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -34,6 +34,7 @@ import {
   supportMessages,
   vehicles,
 } from '../src/db/schema/index.js';
+import { recordAudit } from '../src/services/admin/audit.js';
 import { CLEARABLE } from '../src/services/admin/test-data.js';
 import { settleStripeMode } from '../src/services/payments/stripe-mode.js';
 import {
@@ -114,6 +115,23 @@ async function theRest(ctx: TestContext, seeded: Awaited<ReturnType<typeof seedB
     subject: 'Scratch',
     detail: 'A scratch on the door.',
   });
+}
+
+// A few entries already in the log, to see whether a clear touches them.
+async function someAuditEntries(ctx: TestContext, staffId: string, howMany: number) {
+  for (let i = 0; i < howMany; i += 1) {
+    await recordAudit(ctx.db, {
+      staffId,
+      action: 'account_updated',
+      subjectType: 'customer',
+      subjectId: `customer-${i}`,
+      subjectLabel: 'Customer · Test',
+      field: 'Phone',
+      before: 'one',
+      after: 'two',
+      reason: 'Fixing a typo.',
+    });
+  }
 }
 
 type Table =
@@ -217,6 +235,7 @@ describe('each clear takes only what it names', () => {
     godfather = await createSignedInStaff(ctx, 'Gio Godfather', 'godfather');
     await aFullBooking(ctx);
     await aFullBooking(ctx);
+    await someAuditEntries(ctx, godfather.staffId, 3);
   });
   afterAll(async () => {
     await ctx.close();
@@ -282,21 +301,10 @@ describe('each clear takes only what it names', () => {
     expect(await rows(ctx, rewardLedger)).toBe(0);
   });
 
-  it('kept the audit log whole, and wrote one entry for each clear, with the reason and the count', async () => {
-    const entries = await ctx.db.select().from(auditLog).where(eq(auditLog.action, 'test_records_cleared'));
+  it('kept the audit log whole and wrote nothing into it: no note, no entry, for any of those six clears', async () => {
     // payments, deposits, bookings, payouts, providers, customer_spend.
-    expect(entries.map((entry) => entry.field)).toEqual([
-      'Payments',
-      'Deposits',
-      'Bookings',
-      'Payouts',
-      'Rental businesses',
-      'Customer points',
-    ]);
-    for (const entry of entries) {
-      expect(entry).toMatchObject({ subjectType: 'platform', after: '0', reason: 'Resetting after a test run.', staffId: godfather.staffId });
-      expect(Number(entry.before)).toBeGreaterThan(0);
-    }
+    expect(await rows(ctx, auditLog)).toBe(3);
+    expect(await ctx.db.select().from(auditLog).where(eq(auditLog.action, 'test_records_cleared'))).toHaveLength(0);
   });
 });
 
@@ -308,8 +316,20 @@ describe('everything at once', () => {
     godfather = await createSignedInStaff(ctx, 'Gio Godfather', 'godfather');
     await theRest(ctx, await aFullBooking(ctx));
     await theRest(ctx, await aFullBooking(ctx));
-    // Something already in the log, to see it go.
-    await clear(ctx, godfather, 'customer_spend');
+    // Something already in the log, to see it go — an old clearing note from the
+    // earlier version included.
+    await someAuditEntries(ctx, godfather.staffId, 3);
+    await ctx.db.insert(auditLog).values({
+      staffId: godfather.staffId,
+      action: 'test_records_cleared',
+      subjectType: 'platform',
+      subjectId: 'test-data',
+      subjectLabel: 'Test data',
+      field: 'Bookings',
+      before: '4',
+      after: '0',
+      reason: 'An old clearing.',
+    });
     await ctx.db.insert(rewardLedger).values({ customerId: (await ctx.db.select().from(customers))[0]!.id, label: 'Again', points: 5 });
   });
   afterAll(async () => {
@@ -323,7 +343,7 @@ describe('everything at once', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       what: 'everything',
-      breakdown: { deposits: 2, bookings: 2, payments: 2, payouts: 2, vehicles: 2, providers: 2, customers: 4, refunds: 2, disputes: 2, audit_log: 1 },
+      breakdown: { deposits: 2, bookings: 2, payments: 2, payouts: 2, vehicles: 2, providers: 2, customers: 4, refunds: 2, disputes: 2, audit_log: 4 },
     });
     expect(res.json().detail).toContain('Everything is cleared');
 
@@ -350,17 +370,9 @@ describe('everything at once', () => {
     expect(await rows(ctx, platformSettings)).toBe(settingsBefore);
   });
 
-  it('leaves exactly one audit entry: who cleared everything, how much, and why', async () => {
-    const entries = await ctx.db.select().from(auditLog);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      action: 'test_records_cleared',
-      field: 'Everything',
-      after: '0',
-      reason: 'Resetting after a test run.',
-      staffId: godfather.staffId,
-    });
-    expect(Number(entries[0]!.before)).toBeGreaterThan(20);
+  it('leaves the audit log with no rows at all: no note that this happened, and the old clearing note gone too', async () => {
+    expect(await rows(ctx, auditLog)).toBe(0);
+    expect(await ctx.db.select().from(auditLog).where(eq(auditLog.action, 'test_records_cleared'))).toHaveLength(0);
   });
 
   it('is still open afterwards, and the Godfather still signed in, because settings and staff were kept', async () => {
@@ -376,19 +388,19 @@ describe('everything at once', () => {
 });
 
 describe('the audit log on its own', () => {
-  it('clears every entry and leaves the one saying so, and nothing else', async () => {
+  it('clears every entry and leaves none, and nothing else', async () => {
     const ctx = await createTestContext({ env: { ALLOW_TEST_RESET: 'on' } });
     try {
       const godfather = await createSignedInStaff(ctx, 'Gio Godfather', 'godfather');
       await aFullBooking(ctx);
-      for (let i = 0; i < 3; i += 1) await clear(ctx, godfather, 'notifications');
+      await someAuditEntries(ctx, godfather.staffId, 3);
+      // Another clear does not touch the log.
+      await clear(ctx, godfather, 'notifications');
       expect(await rows(ctx, auditLog)).toBe(3);
 
       const res = await clear(ctx, godfather, 'audit_log');
       expect(res.json()).toMatchObject({ what: 'audit_log', cleared: 3 });
-      const entries = await ctx.db.select().from(auditLog);
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({ field: 'Audit log', before: '3', reason: 'Resetting after a test run.', staffId: godfather.staffId });
+      expect(await rows(ctx, auditLog)).toBe(0);
       expect(await rows(ctx, bookings)).toBe(1);
       expect(await rows(ctx, ledgerEntries)).toBe(1);
     } finally {
@@ -404,6 +416,7 @@ describe('the smaller kinds', () => {
     ctx = await createTestContext({ env: { ALLOW_TEST_RESET: 'on' } });
     godfather = await createSignedInStaff(ctx, 'Gio Godfather', 'godfather');
     await theRest(ctx, await seedBooking(ctx.db));
+    await someAuditEntries(ctx, godfather.staffId, 3);
   });
   afterAll(async () => {
     await ctx.close();
@@ -427,7 +440,7 @@ describe('the smaller kinds', () => {
     expect(await rows(ctx, bookings)).toBe(1);
     expect(await rows(ctx, providers)).toBe(1);
     expect(await rows(ctx, customers)).toBe(2);
-    expect(await rows(ctx, auditLog)).toBe(cases.length);
+    expect(await rows(ctx, auditLog)).toBe(3);
   });
 
   it('refuses customer accounts while bookings point at them, then keeps whoever runs a business', async () => {
@@ -443,6 +456,35 @@ describe('the smaller kinds', () => {
     const [kept] = await ctx.db.select().from(customers);
     const [member] = await ctx.db.select().from(providerMembers);
     expect(member!.customerId).toBe(kept!.id);
+  });
+});
+
+describe('a step that cannot finish', () => {
+  it('names the step, changes nothing, and leaves nothing in the log about it', async () => {
+    const ctx = await createTestContext({ env: { ALLOW_TEST_RESET: 'on' } });
+    try {
+      const godfather = await createSignedInStaff(ctx, 'Gio Godfather', 'godfather');
+      await theRest(ctx, await aFullBooking(ctx));
+      await someAuditEntries(ctx, godfather.staffId, 2);
+      await ctx.db.execute(sql`
+        create function block_customers() returns trigger as $$
+        begin raise exception 'blocked for the test'; end $$ language plpgsql`);
+      await ctx.db.execute(sql`create trigger block_customers before delete on customers for each row execute function block_customers()`);
+
+      const res = await clear(ctx, godfather, 'everything');
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error.code).toBe('clear_failed');
+      expect(res.json().error.message).toContain('customer accounts');
+      expect(res.json().error.message).toContain('Nothing was changed.');
+
+      // Every step before that one was undone, and the log is exactly as it was.
+      for (const table of [bookings, deposits, ledgerEntries, payouts, vehicles, providers, chatThreads, notifications, supportMessages, fleetRequests, refundRequests, disputes]) {
+        expect(await rows(ctx, table)).toBeGreaterThan(0);
+      }
+      expect(await rows(ctx, auditLog)).toBe(2);
+    } finally {
+      await ctx.close();
+    }
   });
 });
 

@@ -5,7 +5,7 @@
 // conversations, the audit log…) or everything at once — so the owner can try
 // SXM Rentals out for real and then put it back.
 //
-// THE MOST DANGEROUS THING IN THIS REPO, so it is fenced four ways:
+// THE MOST DANGEROUS THING IN THIS REPO, so it is fenced three ways:
 //
 //   1. IT SHUTS ITSELF. Checked on every call, never a setting to remember:
 //        - ALLOW_TEST_RESET=on must be set on the server (absent means shut);
@@ -18,19 +18,25 @@
 //      inside its own transaction — if either changed, everything is undone.
 //      Keeping the settings is what keeps fence 1 standing: the record that
 //      Stripe ran live lives there.
-//   3. THE AUDIT LOG IS ONLY CLEARED WHEN THAT IS WHAT WAS ASKED FOR — "Audit
-//      log" or "Everything". Every other clear proves it left the log alone, the
-//      same way as the staff accounts. And no clear leaves the log empty: each one
-//      writes its own entry, in the same transaction, after it has run — so even
-//      straight after the log is cleared, it says who cleared it, when, how much
-//      went and why.
-//   4. GODFATHER ONLY, with the authenticator code (checked by the route).
+//   3. GODFATHER ONLY, with the authenticator code (checked by the route).
+//
+// NOTHING IS LEFT BEHIND. This is the owner's decision, made firmly and more than
+// once: the Godfather is the one account that answers to nobody for what it does
+// to test data, so a clear writes no audit entry and no note of any kind. The
+// audit log can itself be cleared, on its own or with Everything, and is then
+// empty — no row says it happened. Fence 1 is the safeguard instead of a trail:
+// once Stripe has run live, none of this works for anybody, the Godfather
+// included. Every clear other than the log's own and Everything's still proves
+// it left the log alone.
 //
 // EACH CLEAR TAKES ONLY WHAT IT NAMES. Where the database will not let one kind
 // go without another (a deposit cannot exist without its booking), it refuses
 // and says what would have to go first, rather than taking more than was asked.
 // "Everything" is the way to take it all in one go: it runs every clear in the
 // order the database needs, in one transaction, so it either all goes or none.
+// The audit log goes LAST of all, so a step that fails part-way can never leave a
+// record saying a clearing was attempted: the failure says which step it was, and
+// nothing — in the log or anywhere else — has changed.
 
 import { count, isNotNull, notInArray } from 'drizzle-orm';
 import type { Config } from '../../config.js';
@@ -439,8 +445,7 @@ const PLANS: Record<OneKind, Plan> = {
     },
   },
 
-  // Every entry in the audit log. The entry written straight after, by clear()
-  // itself, is the one that stays: who cleared it, when, how many, and why.
+  // Every entry in the audit log, none kept. Nothing is written in its place.
   audit_log: {
     removesFrom: ['audit_log'],
     blockedBy: async () => null,
@@ -448,14 +453,14 @@ const PLANS: Record<OneKind, Plan> = {
       const gone = await db.delete(auditLog).returning({ id: auditLog.id });
       return {
         cleared: gone.length,
-        detail: `${gone.length} audit entry(ies) cleared. One entry stays, recording that you cleared the log, when, and why.`,
+        detail: `${gone.length} audit entry(ies) cleared.`,
       };
     },
   },
 };
 
 // The order Everything clears in: what points at something goes before the
-// thing it points at, so no step is ever refused.
+// thing it points at, so no step is ever refused. The audit log is last of all.
 const EVERYTHING_ORDER: OneKind[] = [
   'deposits',
   'refunds',
@@ -474,13 +479,30 @@ const EVERYTHING_ORDER: OneKind[] = [
   'audit_log',
 ];
 
+// A step that fails says which one it was, in a sentence. The transaction around
+// it undoes everything, so "nothing was changed" is true when this is thrown.
+async function withFailureNamed<T>(what: OneKind, step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    const failure = new AppError(
+      500,
+      'clear_failed',
+      `Clearing stopped at ${LABELS[what].toLowerCase()}, which the database would not let go. Nothing was changed.`,
+    );
+    failure.cause = error;
+    throw failure;
+  }
+}
+
 const EVERYTHING: Plan = {
   removesFrom: [...new Set(EVERYTHING_ORDER.flatMap((what) => PLANS[what].removesFrom))],
   blockedBy: async () => null,
   run: async (db) => {
     const breakdown: Partial<Record<OneKind, number>> = {};
     for (const what of EVERYTHING_ORDER) {
-      breakdown[what] = (await PLANS[what].run(db)).cleared;
+      breakdown[what] = (await withFailureNamed(what, () => PLANS[what].run(db))).cleared;
     }
     const cleared = Object.values(breakdown).reduce((sum, value) => sum + (value ?? 0), 0);
     const said = EVERYTHING_ORDER.filter((what) => (breakdown[what] ?? 0) > 0).map(
@@ -491,7 +513,7 @@ const EVERYTHING: Plan = {
       breakdown,
       detail:
         (said.length > 0 ? `Everything is cleared: ${said.join(', ')}. ` : 'There was nothing to clear. ') +
-        'Staff accounts and platform settings are kept, and the audit log keeps one entry recording this. ' +
+        'Staff accounts and platform settings are kept. ' +
         'Money at Stripe, photo files in Cloudinary, and texts and emails already sent are not touched by this.',
     };
   },
@@ -519,6 +541,7 @@ export function createTestDataService(deps: { db: Database; config: Config }) {
       };
     },
 
+    // reason is accepted because the panel asks for one, and is not recorded.
     async clear(actor: AdminActor, input: { what: Clearable; reason: string }) {
       requireTier(actor, 'godfather');
       await assertOpen(db, config);
@@ -535,7 +558,8 @@ export function createTestDataService(deps: { db: Database; config: Config }) {
       return db.transaction(async (tx) => {
         const t = tx as unknown as Database;
         const before = await guardedCounts(t);
-        const result = await plan.run(t);
+        // Everything names its own failing step; a single kind is named here.
+        const result = await (input.what === 'everything' ? plan.run(t) : withFailureNamed(input.what, () => plan.run(t)));
         const after = await guardedCounts(t);
         if (before.staff !== after.staff || before.settings !== after.settings) {
           throw new Error('A clear changed the staff accounts or the platform settings; undone.');
@@ -543,17 +567,7 @@ export function createTestDataService(deps: { db: Database; config: Config }) {
         if (!clearsTheLog && before.audit !== after.audit) {
           throw new Error('A clear changed the audit log without being asked to; undone.');
         }
-        await recordAudit(t, {
-          staffId: actor.staffId,
-          action: 'test_records_cleared',
-          subjectType: 'platform',
-          subjectId: 'test-data',
-          subjectLabel: 'Test data',
-          field: LABELS[input.what],
-          before: String(result.cleared),
-          after: '0',
-          reason: input.reason,
-        });
+        // No audit entry, no note: see "NOTHING IS LEFT BEHIND" at the top.
         return {
           what: input.what,
           cleared: result.cleared,

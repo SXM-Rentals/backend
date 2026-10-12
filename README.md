@@ -256,7 +256,7 @@ Everything lives under `/api/v1`.
 | GET · POST | `/admin/fleet-requests…` | Businesses asking us to set their fleet up · download a file · mark done |
 | GET · POST | `/admin/providers…` `/admin/vehicles…` | Read, and approve or reject a business or listing |
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code. With `override` (Owner and above), its upcoming rentals are cancelled and refunded in full first |
-| POST | `/admin/providers/:id/delete` | Delete a business for good — Owner and above, reason and authenticator code. Refused for a business with bookings or payouts on record (close it instead), except test data before launch |
+| POST | `/admin/providers/:id/delete` | Delete a business for good. The Godfather: immediately, empty body, nothing refused or logged. Owner: reason and authenticator code, refused for a business with bookings or payouts on record (close it instead), logged |
 | GET · POST | `/admin/test-data/status` · `/clear` | Before launch only: whether clearing test records is open, and clearing one kind or `everything` at once — Godfather only, reason and authenticator code |
 | POST | `/admin/bookings/:id/cancel` | Cancel a rental as SXM Rentals, with a full refund or none — Owner and above, reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
@@ -714,16 +714,29 @@ notifications, support messages, fleet requests, the audit log — or
 - It is open only while `ALLOW_TEST_RESET=on` **and** Stripe has never run in
   live mode here. Putting live Stripe keys on the server shuts it for good.
 - Staff accounts and platform settings are never cleared, by anything.
-- The audit log is cleared only when that is what was asked for (the log itself,
-  or Everything), and is never left empty: an entry saying who cleared it, when,
-  how much and why is always written straight after.
+- **Clearing leaves nothing behind**: no audit entry and no note, whatever is
+  cleared. The audit log can itself be cleared, on its own or with Everything,
+  and is then empty. That is the owner's decision, not an oversight. The window
+  above is the safeguard instead of a trail: once Stripe has run live, none of
+  this works for anybody, the Godfather included.
+- Every other clear leaves the audit log exactly as it was, and Everything clears
+  the log last. If a step cannot finish, the error names it and nothing at all
+  has changed.
 - Nothing at Stripe, in Cloudinary or already sent (emails, texts, pushes) is
   touched.
 
-Deleting a single business works on the live platform too, from its page in the
-panel (Owner and above): a business that never traded goes with its cars and
-everything else that was only its own. One with bookings or payouts on record is
-refused — those are renters' rentals and money records — so close it instead.
+Deleting a business works on the live platform too, from its page in the panel:
+
+- **The Godfather deletes immediately.** The request carries nothing — no reason,
+  no code — and nothing stands in the way: a business with bookings, held
+  deposits, pending payouts, disputes and refund requests is deleted with all of
+  them, in one transaction, with no audit entry. Nothing is sent to Stripe, so
+  anything in flight there is left as it is. The answer says exactly what went.
+- **An Owner** gives a reason and the code. A business that never traded goes
+  with its cars and everything else that was only its own; one with bookings or
+  payouts on record is refused — those are renters' rentals and money records —
+  so close it instead. It is logged as `business_deleted`.
+- Anybody below Owner is refused.
 
 ### Winding the database back to a moment (before launch)
 

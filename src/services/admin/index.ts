@@ -39,7 +39,7 @@ import {
   vehicleDocuments,
   vehicles,
 } from '../../db/schema/index.js';
-import { badRequest, conflict, notFound } from '../../lib/errors.js';
+import { AppError, badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isUuid } from '../../lib/ownership.js';
 import type { PaymentGateway } from '../../lib/stripe.js';
 import type { PaymentService } from '../payments/index.js';
@@ -74,6 +74,52 @@ export type AdminServiceDeps = {
   // it counts as shut.
   testResetOpen?: (() => Promise<boolean>) | undefined;
 };
+
+// What deleting a business took, counted.
+type BusinessRemoved = {
+  deposits: number;
+  refundRequests: number;
+  disputes: number;
+  paymentLines: number;
+  bookings: number;
+  payouts: number;
+  vehicles: number;
+};
+
+// Removes one business's own rows, in the order the database needs: what points
+// at its bookings, the bookings, its payouts, its cars, then the business, which
+// takes the rest (photos, papers, codes, conversations, fleet requests, payout
+// set-up) with it. withHistory false leaves bookings, payments and payouts alone
+// — they are then not even attempted. saying() names each step as it starts, so a
+// failure can say which one it was. It runs inside the caller's transaction.
+async function removeBusinessRecords(
+  t: Database,
+  providerId: string,
+  options: { withHistory: boolean },
+  saying: (step: string) => void,
+): Promise<BusinessRemoved> {
+  const theirBookings = () => t.select({ id: bookings.id }).from(bookings).where(eq(bookings.providerId, providerId));
+  const removed: BusinessRemoved = { deposits: 0, refundRequests: 0, disputes: 0, paymentLines: 0, bookings: 0, payouts: 0, vehicles: 0 };
+  if (options.withHistory) {
+    saying('its deposits');
+    removed.deposits = (await t.delete(deposits).where(inArray(deposits.bookingId, theirBookings())).returning({ id: deposits.id })).length;
+    saying('its refund requests');
+    removed.refundRequests = (await t.delete(refundRequests).where(inArray(refundRequests.bookingId, theirBookings())).returning({ id: refundRequests.id })).length;
+    saying('its disputes');
+    removed.disputes = (await t.delete(disputes).where(inArray(disputes.bookingId, theirBookings())).returning({ id: disputes.id })).length;
+    saying('its payment lines');
+    removed.paymentLines = (await t.delete(ledgerEntries).where(inArray(ledgerEntries.bookingId, theirBookings())).returning({ id: ledgerEntries.id })).length;
+    saying('its bookings');
+    removed.bookings = (await t.delete(bookings).where(eq(bookings.providerId, providerId)).returning({ id: bookings.id })).length;
+    saying('its payouts');
+    removed.payouts = (await t.delete(payouts).where(eq(payouts.providerId, providerId)).returning({ id: payouts.id })).length;
+  }
+  saying('its cars');
+  removed.vehicles = (await t.delete(vehicles).where(eq(vehicles.providerId, providerId)).returning({ id: vehicles.id })).length;
+  saying('the business itself');
+  await t.delete(providers).where(eq(providers.id, providerId));
+  return removed;
+}
 
 // How long something has been waiting, in the words the queue screen uses.
 function urgencyFor(since: Date): 'normal' | 'aging' | 'overdue' {
@@ -619,27 +665,22 @@ export function createAdminService(deps: AdminServiceDeps) {
     },
 
     // ---- DELETING A BUSINESS FOR GOOD ----
-    // Closing keeps a business on record and can be undone; this removes it.
-    // Owner and above, with the code (checked by the route), on the live platform
-    // as much as before launch. Meant for a business that never traded — an
-    // application made by mistake, a duplicate, a test — and it takes the cars,
-    // photos, papers, discount codes, conversations, fleet requests and payout
-    // set-up with it. The people who ran it keep their own accounts.
+    // Closing keeps a business on record and can be undone; deleting removes it.
+    // Two different things, for two different people:
     //
-    // A business with bookings or payouts on record is refused, with nothing
-    // changed: those are renters' rentals and the platform's money records, and
-    // deleting the business would mean deleting them. Close it instead. The one
-    // exception is test data before launch: while the Godfather's test-data
-    // clearing is open, the Godfather may delete a business together with its
-    // bookings, deposits, refund requests, disputes, payment lines and payouts.
+    // OWNER (deleteProvider): with a reason and the authenticator code (checked by
+    // the route), logged as business_deleted. Meant for a business that never
+    // traded — an application made by mistake, a duplicate, a test — and it takes
+    // the cars, photos, papers, discount codes, conversations, fleet requests and
+    // payout set-up with it. A business with bookings or payouts on record is
+    // refused with nothing changed: those are renters' rentals and the platform's
+    // money records. Close it instead.
     async deleteProvider(actor: AdminActor, id: string, input: { reason: string }) {
       requireTier(actor, 'owner');
       const provider = await loadProvider(id);
       const [bookingCount] = await db.select({ value: count() }).from(bookings).where(eq(bookings.providerId, provider.id));
       const [payoutCount] = await db.select({ value: count() }).from(payouts).where(eq(payouts.providerId, provider.id));
-      const traded = (bookingCount?.value ?? 0) + (payoutCount?.value ?? 0) > 0;
-      const takesHistory = traded && actor.tier === 'godfather' && (await deps.testResetOpen?.()) === true;
-      if (traded && !takesHistory) {
+      if ((bookingCount?.value ?? 0) + (payoutCount?.value ?? 0) > 0) {
         throw conflict(
           'has_history',
           `${provider.businessName} has ${bookingCount?.value ?? 0} booking(s) and ${payoutCount?.value ?? 0} payout(s) on record. ` +
@@ -648,29 +689,12 @@ export function createAdminService(deps: AdminServiceDeps) {
         );
       }
 
+      // Its history is NOT removed on this path: if a booking arrived a moment
+      // after the check above, the database refuses to delete the car it is for,
+      // and nothing changes.
       const removed = await db.transaction(async (tx) => {
         const t = tx as unknown as Database;
-        const theirBookings = () => t.select({ id: bookings.id }).from(bookings).where(eq(bookings.providerId, provider.id));
-        // Without leave to take its history, none of it is even attempted: if a
-        // booking arrived a moment after the check above, the database refuses
-        // to delete the car it is for, and nothing changes.
-        const theirHistory = takesHistory
-          ? {
-              deposits: (await t.delete(deposits).where(inArray(deposits.bookingId, theirBookings())).returning({ id: deposits.id })).length,
-              refundRequests: (await t.delete(refundRequests).where(inArray(refundRequests.bookingId, theirBookings())).returning({ id: refundRequests.id })).length,
-              disputes: (await t.delete(disputes).where(inArray(disputes.bookingId, theirBookings())).returning({ id: disputes.id })).length,
-              paymentLines: (await t.delete(ledgerEntries).where(inArray(ledgerEntries.bookingId, theirBookings())).returning({ id: ledgerEntries.id })).length,
-              bookings: (await t.delete(bookings).where(eq(bookings.providerId, provider.id)).returning({ id: bookings.id })).length,
-              payouts: (await t.delete(payouts).where(eq(payouts.providerId, provider.id)).returning({ id: payouts.id })).length,
-            }
-          : { deposits: 0, refundRequests: 0, disputes: 0, paymentLines: 0, bookings: 0, payouts: 0 };
-        const gone = {
-          ...theirHistory,
-          vehicles: (await t.delete(vehicles).where(eq(vehicles.providerId, provider.id)).returning({ id: vehicles.id })).length,
-        };
-        await t.delete(providers).where(eq(providers.id, provider.id));
-
-        const history = gone.bookings + gone.payouts > 0 ? `, ${gone.bookings} booking(s) and ${gone.payouts} payout(s) (test data)` : '';
+        const gone = await removeBusinessRecords(t, provider.id, { withHistory: false }, () => undefined);
         await recordAudit(t, {
           staffId: actor.staffId,
           action: 'business_deleted',
@@ -679,7 +703,7 @@ export function createAdminService(deps: AdminServiceDeps) {
           subjectLabel: `Business · ${provider.businessName}`,
           field: 'Business',
           before: provider.deletedAt ? 'Closed' : 'Open',
-          after: `Deleted, with ${gone.vehicles} car(s)${history}`,
+          after: `Deleted, with ${gone.vehicles} car(s)`,
           reason: input.reason,
         });
         return gone;
@@ -692,10 +716,63 @@ export function createAdminService(deps: AdminServiceDeps) {
         removed,
         detail:
           `${provider.businessName} is deleted, with ${removed.vehicles} car(s), their photos and papers, its discount codes, conversations and payout set-up. ` +
-          (removed.bookings + removed.payouts > 0
-            ? `Its test history went with it: ${removed.bookings} booking(s), ${removed.deposits} deposit(s), ${removed.paymentLines} payment line(s) and ${removed.payouts} payout(s). `
-            : '') +
           'The people who ran it keep their own accounts. A Stripe account it opened stays at Stripe.',
+      };
+    },
+
+    // GODFATHER (deleteProviderOutright): immediately — no reason, no code, no
+    // has_history refusal, no test-data window, and NO AUDIT ENTRY, like the rest of
+    // the Godfather's test-data work. A business with bookings, held deposits,
+    // pending payouts, disputes and refund requests is deleted like an empty one,
+    // with all of it. One transaction: if any step cannot finish, nothing is
+    // deleted and the error says which step it was. Stripe is NOT called — only
+    // our own rows go; whatever is in flight there is left exactly as it is.
+    async deleteProviderOutright(actor: AdminActor, id: string) {
+      requireTier(actor, 'godfather');
+      const provider = await loadProvider(id);
+
+      let step = 'the business';
+      let removed: BusinessRemoved;
+      try {
+        removed = await db.transaction(async (tx) => {
+          const t = tx as unknown as Database;
+          return removeBusinessRecords(t, provider.id, { withHistory: true }, (now) => {
+            step = now;
+          });
+        });
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+        const failure = new AppError(
+          500,
+          'delete_failed',
+          `${provider.businessName} could not be deleted: the database would not let go of ${step}. Nothing was deleted.`,
+        );
+        failure.cause = error;
+        throw failure;
+      }
+
+      const parts = [
+        [removed.vehicles, 'car'],
+        [removed.bookings, 'booking'],
+        [removed.deposits, 'deposit record'],
+        [removed.paymentLines, 'payment line'],
+        [removed.payouts, 'payout'],
+        [removed.refundRequests, 'refund request'],
+        [removed.disputes, 'dispute'],
+      ]
+        .filter(([n]) => (n as number) > 0)
+        .map(([n, word]) => `${n} ${word}${n === 1 ? '' : 's'}`);
+      const listed = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] ?? 'nothing else');
+
+      return {
+        id: provider.id,
+        businessName: provider.businessName,
+        deleted: true,
+        removed,
+        detail:
+          `${provider.businessName} is deleted, with ${listed}, and its photos, papers, discount codes, conversations and payout set-up. ` +
+          'The people who ran it keep their own accounts. ' +
+          'Nothing was sent to Stripe: a card hold, a refund or a payout already in progress there is left exactly as it is, and money Stripe took stays at Stripe.',
       };
     },
 

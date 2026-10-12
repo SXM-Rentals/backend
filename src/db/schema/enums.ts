@@ -142,7 +142,8 @@ export const auditAction = pgEnum('audit_action', [
   'payout_marked_paid',
   // A rental cancelled by staff, not by the renter.
   'booking_cancelled',
-  // Test records cleared by the Godfather before launch.
+  // No longer written (the Godfather's clears leave no entry); the value stays
+  // because entries from the earlier version may still be in a database.
   'test_records_cleared',
   // A rental business removed for good, not just closed.
   'business_deleted',
