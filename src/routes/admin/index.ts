@@ -38,6 +38,8 @@ import type { VerificationService } from '../../services/verification/index.js';
 import type { SupportService } from '../../services/support/index.js';
 import { CLEARABLE, type TestDataService } from '../../services/admin/test-data.js';
 import { SINGLE_KINDS } from '../../services/admin/test-data-single.js';
+import { BACKUP_KINDS, type BackupsService } from '../../services/admin/backups.js';
+import type { SignInHistory } from '../../services/admin/sign-ins.js';
 import {
   fleetRequestFile,
   getFleetRequest,
@@ -49,6 +51,8 @@ import type { Database } from '../../db/client.js';
 
 export type AdminRouteOptions = {
   testData: TestDataService;
+  backups: BackupsService;
+  signIns: SignInHistory;
   db: Database;
   config: Config;
   admin: AdminService;
@@ -126,6 +130,33 @@ const staffResetBody = z.object({
 });
 const reasonAndCodeBody = z.object({ reason, code });
 const clearBody = z.object({ what: z.enum(CLEARABLE), reason, code });
+// Sign-in history and saved versions, both Godfather only.
+const signInsQuery = z.object({
+  staffId: z.uuid().optional(),
+  tier: z.enum(['godfather', 'owner', 'administrator', 'viewer']).optional(),
+  status: z.enum(['active', 'ended']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+const saveVersionBody = z.object({ note: z.string().trim().max(200).optional() });
+const versionRecordsQuery = z.object({
+  kind: z.enum(BACKUP_KINDS).optional(),
+  q: z.string().trim().max(100).optional(),
+  show: z.enum(['all', 'missing']).optional(),
+  sort: z.enum(['at', 'summary', 'amount', 'kind']).optional(),
+  dir: z.enum(['asc', 'desc']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+const versionRecordParams = z.object({ id: z.string().max(64), recordId: z.string().max(64) });
+// reason is accepted because the panel's dialog asks for one; nothing is recorded.
+const restoreVersionBody = z.object({
+  code,
+  reason: z.string().trim().max(1000).optional(),
+  kind: z.enum(BACKUP_KINDS).optional(),
+  recordIds: z.array(z.uuid()).min(1).max(500).optional(),
+});
+const deleteVersionBody = z.object({ code, reason: z.string().trim().max(1000).optional() });
 const deleteOneBody = z.object({ what: z.enum(SINGLE_KINDS), id: z.string().trim().min(1).max(64), reason, code });
 const closeProviderBody = reasonAndCodeBody.extend({ override: z.boolean().optional() });
 const staffCancelBody = z.object({ reason, code, refund: z.enum(['full', 'none']) });
@@ -448,6 +479,61 @@ export default async function adminRoutes(app: FastifyInstance, options: AdminRo
     const body = parseInput(deleteOneBody, request.body);
     await adminAuth.verifyStepUp(actor, body.code);
     return options.testData.deleteOne(actor, body);
+  });
+
+  // ---- WHEN STAFF SIGNED IN AND OUT (Godfather only) ----
+  // Every owner, administrator and viewer: when each session began and ended, how
+  // long it lasted, from where. Read from the sign-in records the server already
+  // keeps. See services/admin/sign-ins.ts.
+  app.get('/sessions', async (request) => {
+    const actor = staff(request);
+    return options.signIns.list(actor, parseInput(signInsQuery, request.query));
+  });
+
+  // ---- SAVED VERSIONS (Godfather only) ----
+  // A copy of the audit log, bookings, payments, payouts, deposits, refund
+  // requests and disputes, saved ONLY when the Godfather asks, that can be
+  // browsed, searched, sorted and put back. Putting back needs the authenticator
+  // code and never overwrites what is there. See services/admin/backups.ts.
+  app.get('/backups', async (request) => options.backups.list(staff(request)));
+
+  app.post('/backups', async (request, reply) => {
+    const actor = staff(request);
+    const body = parseInput(saveVersionBody, request.body ?? {});
+    return reply.status(201).send(await options.backups.save(actor, body));
+  });
+
+  app.get('/backups/:id', async (request) => {
+    const actor = staff(request);
+    return options.backups.get(actor, parseInput(idParam, request.params).id);
+  });
+
+  app.get('/backups/:id/records', async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    return options.backups.records(actor, id, parseInput(versionRecordsQuery, request.query));
+  });
+
+  app.get('/backups/:id/records/:recordId', async (request) => {
+    const actor = staff(request);
+    const { id, recordId } = parseInput(versionRecordParams, request.params);
+    return options.backups.record(actor, id, recordId);
+  });
+
+  app.post('/backups/:id/restore', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(restoreVersionBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return options.backups.restore(actor, id, body);
+  });
+
+  app.post('/backups/:id/delete', { config: { rateLimit: AUTH_LIMITS.passwordChange } }, async (request) => {
+    const actor = staff(request);
+    const { id } = parseInput(idParam, request.params);
+    const body = parseInput(deleteVersionBody, request.body);
+    await adminAuth.verifyStepUp(actor, body.code);
+    return options.backups.remove(actor, id);
   });
 
   app.get('/fleet-requests', async (request) => {

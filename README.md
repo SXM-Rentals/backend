@@ -258,6 +258,8 @@ Everything lives under `/api/v1`.
 | POST | `/admin/providers/:id/close` · `/reopen` | Close a business or open it again — reason and authenticator code. With `override` (Owner and above), its upcoming rentals are cancelled and refunded in full first |
 | POST | `/admin/providers/:id/delete` | Delete a business for good. The Godfather: immediately, empty body, nothing refused or logged. Owner: reason and authenticator code, refused for a business with bookings or payouts on record (close it instead), logged |
 | GET · POST | `/admin/test-data/status` · `/clear` | Before launch only: whether clearing test records is open, and clearing one kind or `everything` at once — Godfather only, reason and authenticator code |
+| GET | `/admin/sessions` | When every member of staff — owners, administrators, viewers — signed in and out, and how long each session lasted. Godfather only. Read from the sign-in records the server already keeps |
+| GET · POST | `/admin/backups…` | The Godfather's saved versions: save one, browse, search and sort what is in it, put back what was deleted, delete a version. Godfather only; putting back and deleting a version need the authenticator code |
 | POST | `/admin/test-data/delete` | Before launch only: delete ONE record (`what` + `id`) of a kind the status endpoint marks `single` — same terms as the clear. Refuses with `would_take_more` rather than take something else with it |
 | POST | `/admin/bookings/:id/cancel` | Cancel a rental as SXM Rentals, with a full refund or none — Owner and above, reason and authenticator code |
 | POST | `/admin/staff/:id/tier` | Change what a colleague may do — Owner and above, with a reason and code |
@@ -736,6 +738,29 @@ or customer with bookings, a customer who runs a business are refused with
 `would_take_more` and a sentence saying what has to go first. It writes no audit
 entry, and deleting an audit entry leaves nothing in its place — any entry can go,
 including old clearing notes.
+
+**Saved versions** are the undo for all of that, and are seen by the Godfather
+alone. `POST /admin/backups` copies the audit log, bookings (with their price
+lines, signature, date changes and review), payments, payouts, deposits, refund
+requests and disputes **only when it is asked to** — nothing is copied in the
+background, so a delete leaves no copy behind unless a version was saved first.
+`GET /admin/backups/:id/records` lists what is in a version, searchable
+(`q`), filterable (`kind`, `show=missing` for just what has since been deleted)
+and sortable (`sort` = at, summary, amount or kind; `dir`), a page at a time, and
+each record says whether it is `inLive`. `POST /admin/backups/:id/restore` puts
+back what is missing — a whole version, one `kind`, or chosen `recordIds` — in the
+order the database needs. It **never overwrites** what is there now, tells a
+record that cannot go back (its car, customer, business or booking is gone) from
+the rest and says why, and drops a link to a payout or discount that no longer
+exists rather than blocking the booking. It keeps working after Stripe has run
+live, because putting records back harms nobody. At most 20 versions are kept.
+Saving, looking, restoring and deleting a version write nothing to the audit log.
+
+**When staff signed in and out** is `GET /admin/sessions` (Godfather only): every
+sign-in with who, when it began, when and how it ended (`signed_out`,
+`timed_out` or still `active`), how long it lasted, and the address and device.
+It adds no recording: every staff sign-in already leaves a row, and none is ever
+deleted.
 
 Deleting a business works on the live platform too, from its page in the panel:
 

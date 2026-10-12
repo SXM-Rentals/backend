@@ -24,3 +24,4 @@ export * from './security.js';
 export * from './push.js';
 export * from './account.js';
 export * from './date-changes.js';
+export * from './backups.js';

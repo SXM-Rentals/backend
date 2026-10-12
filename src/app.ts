@@ -58,6 +58,8 @@ import { createVerificationService } from './services/verification/index.js';
 import { createAdminAuthService } from './services/admin/auth.js';
 import { createAdminService } from './services/admin/index.js';
 import { createTestDataService } from './services/admin/test-data.js';
+import { createBackupsService } from './services/admin/backups.js';
+import { createSignInHistory } from './services/admin/sign-ins.js';
 import { createAdminStaffService } from './services/admin/staff.js';
 import { createAuthService } from './services/auth/index.js';
 import { createNotificationService } from './services/notifications/index.js';
@@ -220,6 +222,9 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const admin = createAdminService({ db, gateway, payments, notifications, integrations });
   // The Godfather's test-data clearing, before launch only.
   const testData = createTestDataService({ db, config });
+  // The Godfather's saved versions, and the staff sign-in history. Godfather only.
+  const backups = createBackupsService({ db });
+  const signIns = createSignInHistory({ db });
   // Staff accounts, managed from the panel. It borrows the sign-in service's
   // lockout counters and session-ending, so there is one of each.
   const staffAccounts = createAdminStaffService({ db, auth: adminAuth, breachedPasswords });
@@ -261,6 +266,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         verification,
         support,
         testData,
+        backups,
+        signIns,
       });
       // Later phases register verification, rewards, notifications, ... here.
     },
